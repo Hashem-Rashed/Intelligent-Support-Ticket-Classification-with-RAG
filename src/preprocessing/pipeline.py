@@ -1,37 +1,57 @@
 from .data_loader import load_data
 from .text_processing import clean_text, merge_subject_description
 import os
+from utils.config import settings
+from utils.logger import get_logger
 
-def run_pipeline():
+logger = get_logger(__name__)
 
-    import os
+def run_pipeline(input_path: str | None = None, output_path: str | None = None):
+    """Execute the preprocessing pipeline.
 
-    BASE_DIR = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../")
-    )
+    The function is parameterised to support configurable paths and can be used
+    programmatically by other components (e.g. training scripts or tests).
 
-    input_path = os.path.join(BASE_DIR, "data/raw/tickets.csv")
-    output_path = os.path.join(BASE_DIR, "data/processed/tickets_cleaned.csv")
+    Args:
+        input_path: optional path to the raw data CSV. Defaults to
+            ``{settings.DATA_RAW_PATH}/tickets.csv`` under project root.
+        output_path: optional destination for cleaned data. Defaults to
+            ``{settings.DATA_PROCESSED_PATH}/tickets_cleaned.csv`` under project root.
 
-    data = load_data(input_path)
+    Returns:
+        The cleaned :class:`pandas.DataFrame` that was persisted to disk.
+    """
+    base_dir = settings.PROJECT_ROOT
 
-    cols_to_drop = [
-        "Customer_Name",
-        "Customer_Email",
-        "Assigned_Agent",
-        "Submission_Date",
-        "Ticket_ID",
-        "Satisfaction_Score"
-    ]
+    if input_path is None:
+        input_path = os.path.join(base_dir, settings.DATA_RAW_PATH, "tickets.csv")
 
-    data = data.drop(columns=cols_to_drop)
+    if output_path is None:
+        output_path = os.path.join(base_dir, settings.DATA_PROCESSED_PATH, "tickets_cleaned.csv")
 
-    data = merge_subject_description(data)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    data["clean_text"] = data["full_text"].apply(clean_text)
+    logger.info("Starting preprocessing pipeline")
+    try:
+        data = load_data(input_path)
 
-    final_data = data[["clean_text", "Issue_Category"]]
+        cols_to_drop = [
+            "Customer_Name",
+            "Customer_Email",
+            "Assigned_Agent",
+            "Submission_Date",
+            "Ticket_ID",
+            "Satisfaction_Score",
+        ]
 
-    final_data.to_csv(output_path, index=False)
+        data = data.drop(columns=cols_to_drop)
+        data = merge_subject_description(data)
+        data["clean_text"] = data["full_text"].apply(clean_text)
+        final_data = data[["clean_text", "Issue_Category"]]
 
-    print("Pipeline executed successfully!")
+        final_data.to_csv(output_path, index=False)
+        logger.info(f"Pipeline executed successfully, output written to {output_path}")
+        return final_data
+    except Exception as exc:
+        logger.exception("Preprocessing pipeline failed")
+        raise

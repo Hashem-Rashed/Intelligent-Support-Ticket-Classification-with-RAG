@@ -24,7 +24,11 @@ class Settings:
     DATA_EMBEDDINGS_PATH: str = os.getenv("DATA_EMBEDDINGS_PATH", "data/embeddings")
 
     # Model Configuration
-    MODEL_NAME: str = os.getenv("MODEL_NAME", "bert-base-uncased")
+    # ``MODEL_NAME`` drives both the embedding generation and any downstream
+    # transformer training. the default here uses a lightweight sentence-
+    # transformer; override via environment variable or by passing an explicit
+    # ``model_name`` argument to ``generate_embeddings``.
+    MODEL_NAME: str = os.getenv("MODEL_NAME", "all-MiniLM-L6-v2")
     MAX_SEQUENCE_LENGTH: int = int(os.getenv("MAX_SEQUENCE_LENGTH", "512"))
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "32"))
     EPOCHS: int = int(os.getenv("EPOCHS", "5"))

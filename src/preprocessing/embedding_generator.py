@@ -2,37 +2,46 @@ import os
 import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
+from utils.config import settings
+from utils.logger import get_logger
 
-def generate_embeddings():
+logger = get_logger(__name__)
 
-    BASE_DIR = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../")
-    )
+def generate_embeddings(
+    input_path: str | None = None,
+    output_path: str | None = None,
+    model_name: str | None = None,
+):
+    """Produce and save vector representations for cleaned tickets.
 
-    input_path = os.path.join(
-        BASE_DIR,
-        "data/processed/tickets_cleaned.csv"
-    )
+    Args:
+        input_path: path to cleaned data CSV. Defaults to
+            ``{settings.DATA_PROCESSED_PATH}/tickets_cleaned.csv``.
+        output_path: destination for embedding array. Defaults to
+            ``{settings.DATA_EMBEDDINGS_PATH}/ticket_embeddings.npy``.
+        model_name: sentence-transformers model name to use; falls back to
+            ``settings.MODEL_NAME``.
 
-    output_path = os.path.join(
-        BASE_DIR,
-        "data/embeddings/ticket_embeddings.npy"
-    )
+    Returns:
+        The generated numpy array of embeddings.
+    """
+    base_dir = settings.PROJECT_ROOT
 
-    # Load cleaned dataset
+    if input_path is None:
+        input_path = os.path.join(base_dir, settings.DATA_PROCESSED_PATH, "tickets_cleaned.csv")
+    if output_path is None:
+        output_path = os.path.join(base_dir, settings.DATA_EMBEDDINGS_PATH, "ticket_embeddings.npy")
+    if model_name is None:
+        model_name = settings.MODEL_NAME
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    logger.info(f"Generating embeddings with model '{model_name}'")
     data = pd.read_csv(input_path)
 
-    # Load embedding model
-    model_name = "all-MiniLM-L6-v2"
     model = SentenceTransformer(model_name)
+    embeddings = model.encode(data["clean_text"].tolist(), show_progress_bar=True)
 
-    # Generate embeddings
-    embeddings = model.encode(
-        data["clean_text"].tolist(),
-        show_progress_bar=True
-    )
-
-    # Save embeddings
     np.save(output_path, embeddings)
-
-    print("Embeddings generated and saved successfully!")
+    logger.info(f"Embeddings saved to {output_path}")
+    return embeddings
