@@ -11,7 +11,7 @@ def run_pipeline():
     )
 
     input_path = os.path.join(BASE_DIR, "data/raw/tickets.csv")
-    output_path = os.path.join(BASE_DIR, "data/interim/tickets_cleaned.csv")
+    output_path = os.path.join(BASE_DIR, "data/processed/tickets_cleaned.csv")
 
     data = load_data(input_path)
 

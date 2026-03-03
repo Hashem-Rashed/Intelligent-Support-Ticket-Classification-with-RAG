@@ -11,12 +11,12 @@ def generate_embeddings():
 
     input_path = os.path.join(
         BASE_DIR,
-        "data/interim/tickets_cleaned.csv"
+        "data/processed/tickets_cleaned.csv"
     )
 
     output_path = os.path.join(
         BASE_DIR,
-        "data/interim/ticket_embeddings.npy"
+        "data/embeddings/ticket_embeddings.npy"
     )
 
     # Load cleaned dataset
