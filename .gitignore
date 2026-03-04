@@ -130,14 +130,6 @@ dmypy.json
 *~
 .DS_Store
 
-# Data files
-data/raw/*
-data/processed/*
-data/embeddings/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-!data/embeddings/.gitkeep
-
 # Model artifacts
 models/checkpoints/*
 models/saved/*
