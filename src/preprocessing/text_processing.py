@@ -4,10 +4,11 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+stop = set(stopwords.words("english"))
+
 def clean_text(text):
     """Normalize and remove noise from a single text string."""
-    stop = set(stopwords.words("english"))
-
+    
     text = text.lower()
     text = re.sub(r"http\S+", "", text)
     text = re.sub(r"[^a-zA-Z0-9\s]", "", text)
