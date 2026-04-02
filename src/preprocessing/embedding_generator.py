@@ -2,8 +2,8 @@ import os
 import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
-from utils.config import settings
-from utils.logger import get_logger
+from src.utils.config import settings
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

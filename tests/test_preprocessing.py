@@ -6,8 +6,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 import pandas as pd
 import numpy as np
+from src.ingestion.data_loader import load_data
 
-from preprocessing import data_loader, pipeline, embedding_generator
+from preprocessing import  pipeline, embedding_generator
 
 
 def test_load_data(tmp_path):

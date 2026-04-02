@@ -9,7 +9,7 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def load_ticket_data(
+def load_data(
     filepath: Union[str, Path],
     file_format: str = "csv",
     **kwargs

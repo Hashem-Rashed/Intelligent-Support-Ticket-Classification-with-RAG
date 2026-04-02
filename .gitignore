@@ -145,3 +145,5 @@ logs/
 
 # API generated files
 .venv_api/
+
+notebooks/*.csv

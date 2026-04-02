@@ -1,8 +1,8 @@
-from .data_loader import load_data
+from src.ingestion.data_loader import load_data
 from .text_processing import clean_text, merge_subject_description
 import os
-from utils.config import settings
-from utils.logger import get_logger
+from src.utils.config import settings
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
