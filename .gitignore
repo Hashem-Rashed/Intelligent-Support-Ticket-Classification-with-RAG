@@ -147,3 +147,4 @@ logs/
 .venv_api/
 
 notebooks/*.csv
+data/raw/*twcs.csv
