@@ -8,11 +8,18 @@ if project_root not in sys.path:
 
 from src.preprocessing.pipeline import run_pipeline
 from src.preprocessing.embedding_generator import generate_embeddings
-
-
-# `preprocessing` package when the script is executed directly.
-
+from src.preprocessing.data_merger import merge_datasets
 
 if __name__ == "__main__":
-    run_pipeline()
+    # Merge datasets with intelligent categorization
+    # Only categorizes tweets that don't have categories or have generic ones
+    merge_datasets(
+        categorize_tweets=True,
+        overwrite_existing_categories=False  # Preserve existing specific categories
+    )
+    
+    # Run full pipeline with merged data
+    run_pipeline(use_merged_data=True)
+    
+    # Generate embeddings from cleaned data
     generate_embeddings()

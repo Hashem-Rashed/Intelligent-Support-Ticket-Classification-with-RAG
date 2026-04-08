@@ -30,7 +30,7 @@ class Settings:
     # ``model_name`` argument to ``generate_embeddings``.
     MODEL_NAME: str = os.getenv("MODEL_NAME", "all-MiniLM-L6-v2")
     MAX_SEQUENCE_LENGTH: int = int(os.getenv("MAX_SEQUENCE_LENGTH", "512"))
-    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "32"))
+    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "256"))
     EPOCHS: int = int(os.getenv("EPOCHS", "5"))
     LEARNING_RATE: float = float(os.getenv("LEARNING_RATE", "2e-5"))
 

@@ -146,5 +146,7 @@ logs/
 # API generated files
 .venv_api/
 
-notebooks/*.csv
-data/raw/*twcs.csv
+
+data/processed/*
+data/embeddings/*
+data/raw/twcs.csv
