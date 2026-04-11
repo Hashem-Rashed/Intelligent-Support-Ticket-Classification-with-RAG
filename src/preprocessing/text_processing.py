@@ -1,27 +1,53 @@
 import re
-from nltk.corpus import stopwords
+import pandas as pd
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-stop = set(stopwords.words("english"))
 
 def clean_text(text):
     """Normalize and remove noise from a single text string."""
     if pd.isna(text):
         return ""
-    
-    text = str(text).lower()
-    text = re.sub(r"http\S+", "", text)
-    text = re.sub(r"[^a-zA-Z0-9\s]", "", text)
-    cleaned = " ".join([w for w in text.split() if w not in stop])
 
-    logger.debug(f"Original: {text[:100]}... | Cleaned: {cleaned[:100]}...")
-    return cleaned
+    text = str(text).lower()
+    
+    # Remove URLs
+    text = re.sub(r"http\S+|www\S+", "", text)
+    
+    # Remove special characters but keep letters, numbers, spaces
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    
+    # Remove extra spaces
+    text = re.sub(r"\s+", " ", text).strip()
+    
+    # ============================================================
+    # FIX: Remove random word suffix that causes overfitting
+    # The random words always appear after the first '?' or '.'
+    # Keep only the meaningful part before the first punctuation
+    # ============================================================
+    for delimiter in ['?', '.']:
+        if delimiter in text:
+            parts = text.split(delimiter)
+            if len(parts) >= 2:
+                # Take the first part + delimiter
+                text = (parts[0] + delimiter).strip()
+                break
+    
+    # If text is still too long (no punctuation found), keep first 20 words
+    words = text.split()
+    if len(words) > 20:
+        text = ' '.join(words[:20])
+    
+    logger.debug(f"Cleaned: {text[:100]}...")
+    return text
+
 
 def merge_subject_description(data):
-    """Combine subject and description fields into `full_text` for tickets.
-    For Twitter data, just use the text field as is."""
+    """
+    Combine subject and description fields into `full_text` for tickets.
+    For Twitter data, just use the text field as is.
+    """
     logger.info("Merging text fields into full_text")
     
     # Check if we have ticket-specific columns
@@ -38,6 +64,7 @@ def merge_subject_description(data):
         raise ValueError("No suitable text columns found for processing")
     
     return data
+
 
 # Import pandas for NA check
 import pandas as pd

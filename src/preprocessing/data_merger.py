@@ -10,6 +10,8 @@ logger = get_logger(__name__)
 # =========================
 # 🔥 TEXT CLEANING
 # =========================
+# In data_merger.py, replace the clean_text function with:
+
 def clean_text(text: str) -> str:
     if pd.isna(text):
         return ""
@@ -18,6 +20,28 @@ def clean_text(text: str) -> str:
     text = re.sub(r"http\S+|www\S+", "", text)
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
+    
+    # Extract only meaningful content
+    text = extract_meaningful_content(text)
+    
+    return text
+
+
+def extract_meaningful_content(text):
+    """Extract the actual ticket content by removing random word suffix."""
+    if not text or len(text) < 20:
+        return text
+    
+    # Keep only first sentence if it ends with period
+    if '.' in text:
+        first_sentence = text.split('.')[0].strip()
+        if len(first_sentence.split()) >= 5:
+            return first_sentence + '.'
+    
+    # Keep first 20 words maximum
+    words = text.split()
+    if len(words) > 20:
+        return ' '.join(words[:20])
     
     return text
 

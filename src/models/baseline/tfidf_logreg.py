@@ -22,6 +22,8 @@ class TFIDFLogReg:
         max_df: float = 0.8,
         min_df: int = 2,
         C: float = 1.0,
+        class_weight: Optional[str] = None,
+        random_state: int = 42,
     ):
         """
         Initialize TFIDFLogReg model.
@@ -31,11 +33,15 @@ class TFIDFLogReg:
             max_df: Maximum document frequency
             min_df: Minimum document frequency
             C: Inverse of regularization strength
+            class_weight: Class weight strategy for logistic regression
+            random_state: Random seed for reproducibility
         """
         self.max_features = max_features
         self.max_df = max_df
         self.min_df = min_df
         self.C = C
+        self.class_weight = class_weight
+        self.random_state = random_state
 
         self.model = Pipeline([
             ("tfidf", TfidfVectorizer(
@@ -44,7 +50,13 @@ class TFIDFLogReg:
                 min_df=min_df,
                 stop_words="english"
             )),
-            ("logreg", LogisticRegression(C=C, max_iter=1000))
+            ("logreg", LogisticRegression(
+                C=C,
+                class_weight=class_weight,
+                max_iter=1000,
+                random_state=random_state,
+                solver="lbfgs"
+            ))
         ])
 
     def fit(self, X: list, y: np.ndarray) -> None:
