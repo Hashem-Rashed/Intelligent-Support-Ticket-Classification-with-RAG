@@ -142,6 +142,8 @@ class EmbeddingGenerator:
         self.stats['total_docs'] = total_texts
         self.stats['start_time'] = time.time()
         
+        # Normalize output directory path for Windows
+        output_dir = os.path.normpath(output_dir)
         os.makedirs(output_dir, exist_ok=True)
         
         # Create batch directory
@@ -205,33 +207,43 @@ class EmbeddingGenerator:
         
         # Combine all batch files
         logger.info("Combining batch files into single embeddings file...")
-        embeddings_path = os.path.join(output_dir, "ticket_embeddings.npy")
+        
+        # Normalize the output path for Windows
+        embeddings_path = os.path.normpath(os.path.join(output_dir, "ticket_embeddings.npy"))
 
         if not batch_files:
             raise ValueError("No batch files were created during embedding generation")
 
-        # Use a memory-mapped file to assemble the final embeddings without loading the full array repeatedly
+        # Get the shape from the first batch
         first_batch = np.load(batch_files[0])
         embeddings_shape = (total_texts, first_batch.shape[1])
-        embeddings = open_memmap(embeddings_path, mode='w+', dtype=np.float32, shape=embeddings_shape)
+        
+        # FIXED: Use regular numpy array instead of memmap to avoid Windows path issues
+        logger.info(f"Creating array of shape {embeddings_shape}...")
+        embeddings_array = np.zeros(embeddings_shape, dtype=np.float32)
 
         written = 0
         for batch_file in tqdm(batch_files, desc="Combining batches"):
             batch_data = np.load(batch_file)
             batch_size = batch_data.shape[0]
-            embeddings[written:written + batch_size] = batch_data
+            embeddings_array[written:written + batch_size] = batch_data
             written += batch_size
 
             # Delete batch file to save space
-            os.remove(batch_file)
+            try:
+                os.remove(batch_file)
+            except Exception as e:
+                logger.warning(f"Could not remove batch file {batch_file}: {e}")
 
-        del embeddings
+        # Save the combined array
+        logger.info(f"Saving embeddings to {embeddings_path}...")
+        np.save(embeddings_path, embeddings_array)
         
         # Remove batch directory
         try:
             os.rmdir(batch_dir)
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not remove batch directory: {e}")
         
         # Calculate performance
         elapsed_time = time.time() - start_time
@@ -305,6 +317,10 @@ class EmbeddingGenerator:
         if output_dir is None:
             output_dir = os.path.join(base_dir, settings.DATA_EMBEDDINGS_PATH)
         
+        # Normalize paths for Windows
+        input_path = os.path.normpath(input_path)
+        output_dir = os.path.normpath(output_dir)
+        
         self.setup_device()
         self.load_model()
         texts, metadata = self.load_data(input_path)
@@ -319,6 +335,10 @@ def load_embeddings(
 ) -> Tuple[np.ndarray, pd.DataFrame]:
     """Load embeddings and metadata for use"""
     logger.info(f"Loading embeddings from {embeddings_path}")
+    
+    # Normalize paths for Windows
+    embeddings_path = os.path.normpath(embeddings_path)
+    metadata_path = os.path.normpath(metadata_path)
     
     # Load the entire array
     embeddings = np.load(embeddings_path, allow_pickle=False)

@@ -76,11 +76,20 @@ def check_gpu():
         return False
 
 
-def run_step_1_merge(categorize_tweets=True, overwrite_categories=False):
+def run_step_1_merge(categorize_tweets=True, overwrite_categories=False, force=False):
     """Step 1: Merge datasets"""
     logger.info("\n" + "="*60)
     logger.info("STEP 1: Merging Datasets")
     logger.info("="*60)
+    
+    output_path = os.path.join(settings.PROJECT_ROOT, settings.DATA_PROCESSED_PATH, "merged_support_data.csv")
+    
+    # Check if output already exists
+    if os.path.exists(output_path) and not force:
+        response = input(f"File {output_path} already exists. Overwrite? (y/n): ").lower().strip()
+        if response != 'y':
+            logger.info("Skipping dataset merge.")
+            return True
     
     try:
         merge_datasets(
@@ -94,11 +103,20 @@ def run_step_1_merge(categorize_tweets=True, overwrite_categories=False):
         return False
 
 
-def run_step_2_clean(use_merged_data=True):
+def run_step_2_clean(use_merged_data=True, force=False):
     """Step 2: Clean data"""
     logger.info("\n" + "="*60)
     logger.info("STEP 2: Cleaning Data")
     logger.info("="*60)
+    
+    output_path = os.path.join(settings.PROJECT_ROOT, settings.DATA_PROCESSED_PATH, "tickets_cleaned.csv")
+    
+    # Check if output already exists
+    if os.path.exists(output_path) and not force:
+        response = input(f"File {output_path} already exists. Overwrite? (y/n): ").lower().strip()
+        if response != 'y':
+            logger.info("Skipping data cleaning.")
+            return True
     
     try:
         run_pipeline(use_merged_data=use_merged_data)
@@ -113,6 +131,7 @@ def run_step_2_label_tweets(
     confidence_threshold: float = 0.7,
     tweet_chunksize: int = 50000,
     prediction_batch_size: int = 5000,
+    force: bool = False,
 ):
     """Step 2: Label tweets with the trained baseline classifier."""
     logger.info("\n" + "="*60)
@@ -120,10 +139,17 @@ def run_step_2_label_tweets(
     logger.info("="*60)
 
     model_path = get_baseline_model_path()
-    ensure_baseline_model(model_path=model_path)
+    ensure_baseline_model(model_path=model_path, force=force)
 
     output_path = get_high_confidence_tweets_path()
-    if os.path.exists(output_path):
+    
+    # Check if output already exists
+    if os.path.exists(output_path) and not force:
+        response = input(f"File {output_path} already exists. Overwrite? (y/n): ").lower().strip()
+        if response != 'y':
+            logger.info("Skipping tweet labeling.")
+            return True
+    elif os.path.exists(output_path) and force:
         logger.info("Removing existing high-confidence tweet output: %s", output_path)
         os.remove(output_path)
 
@@ -147,11 +173,22 @@ def run_step_3_merge_cleaned_data(
     tickets_path: str | None = None,
     tweets_path: str | None = None,
     output_path: str | None = None,
+    force: bool = False,
 ) -> bool:
     """Step 3: Merge cleaned tickets and high-confidence tweets."""
     logger.info("\n" + "="*60)
     logger.info("STEP 3: Merging Cleaned Data")
     logger.info("="*60)
+
+    if output_path is None:
+        output_path = get_combined_cleaned_path()
+    
+    # Check if output already exists
+    if os.path.exists(output_path) and not force:
+        response = input(f"File {output_path} already exists. Overwrite? (y/n): ").lower().strip()
+        if response != 'y':
+            logger.info("Skipping cleaned data merge.")
+            return True
 
     try:
         merge_cleaned_ticket_and_tweets(
@@ -172,17 +209,31 @@ def run_step_4_generate_embeddings(
     test_mode: bool = False,
     sample_size: int = 1000,
     input_path: str | None = None,
+    force: bool = False,
 ) -> bool:
     """Step 4: Generate embeddings from the combined cleaned dataset."""
     logger.info("\n" + "="*60)
     logger.info("STEP 4: Generating Embeddings")
     logger.info("="*60)
+    
+    # Check if embeddings already exist
+    embeddings_path = os.path.join(settings.PROJECT_ROOT, settings.DATA_EMBEDDINGS_PATH, "ticket_embeddings.npy")
+    
+    if os.path.exists(embeddings_path) and not force and not test_mode:
+        response = input(f"Embeddings file {embeddings_path} already exists. Overwrite? (y/n): ").lower().strip()
+        if response != 'y':
+            logger.info("Skipping embedding generation.")
+            return True
+    elif os.path.exists(embeddings_path) and force:
+        logger.info(f"Force flag set. Will overwrite {embeddings_path}")
+    
     return run_step_3_embeddings(
         batch_size=batch_size,
         use_gpu=use_gpu,
         test_mode=test_mode,
         sample_size=sample_size,
         input_path=input_path,
+        force=force
     )
 
 
@@ -198,11 +249,15 @@ def get_baseline_model_path() -> str:
     return os.path.join(settings.PROJECT_ROOT, settings.DATA_PROCESSED_PATH, "baseline_ticket_classifier.pkl")
 
 
-def ensure_baseline_model(model_path: str | None = None) -> str:
+def ensure_baseline_model(model_path: str | None = None, force: bool = False) -> str:
     model_path = model_path or get_baseline_model_path()
-    if os.path.exists(model_path):
+    
+    if os.path.exists(model_path) and not force:
         logger.info("Baseline model already exists at %s", model_path)
         return model_path
+    elif os.path.exists(model_path) and force:
+        logger.info("Force flag set. Retraining baseline model...")
+        os.remove(model_path)
 
     logger.info("Baseline model not found, training from cleaned ticket data")
     run_baseline_training(
@@ -264,7 +319,7 @@ def merge_cleaned_ticket_and_tweets(
     return output_path
 
 
-def run_step_3_embeddings(batch_size=256, use_gpu=True, test_mode=False, sample_size=1000, input_path=None):
+def run_step_3_embeddings(batch_size=256, use_gpu=True, test_mode=False, sample_size=1000, input_path=None, force=False):
     """Step 3: Generate embeddings"""
     logger.info("\n" + "="*60)
     logger.info("STEP 3: Generating Embeddings")
@@ -285,6 +340,15 @@ def run_step_3_embeddings(batch_size=256, use_gpu=True, test_mode=False, sample_
         return False
     
     os.makedirs(output_dir, exist_ok=True)
+    
+    # Check if embeddings already exist
+    embeddings_path = os.path.join(output_dir, "ticket_embeddings.npy")
+    if os.path.exists(embeddings_path) and not force and not test_mode:
+        logger.info(f"Embeddings already exist at {embeddings_path}")
+        response = input("Overwrite existing embeddings? (y/n): ").lower().strip()
+        if response != 'y':
+            logger.info("Skipping embedding generation.")
+            return True
     
     if test_mode:
         logger.info(f"[TEST MODE] Running with {sample_size:,} samples")
@@ -359,61 +423,42 @@ def run_step_5_complete_pipeline(batch_size=256, use_gpu=True, force_rerun=False
     
     start_time = time.time()
 
-    # Check if outputs already exist
-    tickets_cleaned = os.path.join(settings.PROJECT_ROOT, settings.DATA_PROCESSED_PATH, "tickets_cleaned.csv")
-    tweets_labeled = get_high_confidence_tweets_path()
-    combined_path = get_combined_cleaned_path()
-    embeddings_path = os.path.join(settings.PROJECT_ROOT, settings.DATA_EMBEDDINGS_PATH, "ticket_embeddings.npy")
-    
-    if not force_rerun and os.path.exists(embeddings_path):
-        logger.info(f"[OK] Embeddings already exist at {embeddings_path}")
-        logger.info("Use force_rerun=True to regenerate")
-        return True
-
     # Step 1: Clean tickets only
-    if not force_rerun and os.path.exists(tickets_cleaned):
-        logger.info(f"Skipping ticket cleaning - already exists: {tickets_cleaned}")
-    else:
-        if not run_step_2_clean(use_merged_data=False):
-            logger.error("Ticket cleaning failed. Stopping pipeline.")
-            return False
+    if not run_step_2_clean(use_merged_data=False, force=force_rerun):
+        logger.error("Ticket cleaning failed. Stopping pipeline.")
+        return False
 
     # Step 2: Ensure baseline model exists and label tweets
-    if not force_rerun and os.path.exists(tweets_labeled):
-        logger.info(f"Skipping tweet labeling - already exists: {tweets_labeled}")
-    else:
-        try:
-            model_path = get_baseline_model_path()
-            ensure_baseline_model(model_path=model_path)
+    try:
+        tweet_label_output = get_high_confidence_tweets_path()
+        model_path = get_baseline_model_path()
+        ensure_baseline_model(model_path=model_path, force=force_rerun)
 
-            if os.path.exists(tweets_labeled):
-                logger.info("Removing existing high-confidence tweet output: %s", tweets_labeled)
-                os.remove(tweets_labeled)
+        if os.path.exists(tweet_label_output) and force_rerun:
+            logger.info("Removing existing high-confidence tweet output: %s", tweet_label_output)
+            os.remove(tweet_label_output)
 
-            run_tweet_labeling(
-                model_path=model_path,
-                output_path=tweets_labeled,
-                confidence_threshold=0.7,
-                tweet_chunksize=50000,
-                prediction_batch_size=5000,
-                force_rebuild=True,
-            )
-        except Exception as exc:
-            logger.error("Tweet labeling failed: %s", exc)
-            return False
+        run_tweet_labeling(
+            model_path=model_path,
+            output_path=tweet_label_output,
+            confidence_threshold=0.7,
+            tweet_chunksize=50000,
+            prediction_batch_size=5000,
+            force_rebuild=True,
+        )
+    except Exception as exc:
+        logger.error("Tweet labeling failed: %s", exc)
+        return False
 
     # Step 3: Merge cleaned tickets and labeled tweets
-    if not force_rerun and os.path.exists(combined_path):
-        logger.info(f"Skipping merge - combined data already exists: {combined_path}")
-    else:
-        try:
-            merge_cleaned_ticket_and_tweets()
-        except Exception as exc:
-            logger.error("Merging cleaned ticket and tweet datasets failed: %s", exc)
-            return False
+    try:
+        merge_cleaned_ticket_and_tweets()
+    except Exception as exc:
+        logger.error("Merging cleaned ticket and tweet datasets failed: %s", exc)
+        return False
 
     # Step 4: Generate embeddings from the combined cleaned dataset
-    if not run_step_3_embeddings(batch_size=batch_size, use_gpu=use_gpu, test_mode=False, sample_size=1000, input_path=combined_path):
+    if not run_step_3_embeddings(batch_size=batch_size, use_gpu=use_gpu, test_mode=False, sample_size=1000, force=force_rerun):
         logger.error("Embedding generation failed.")
         return False
 
@@ -517,6 +562,7 @@ def run_pipeline_interactive():
             continue
         
         print(f"\nRunning steps: {steps}")
+        print(f"Force rerun mode: {params['force_rerun']}")
         start_time = time.time()
         
         # Track which steps we've run to avoid duplication
@@ -526,7 +572,7 @@ def run_pipeline_interactive():
         for step in steps:
             if step == 1:
                 if 1 not in steps_run:
-                    run_step_2_clean(use_merged_data=False)
+                    run_step_2_clean(use_merged_data=False, force=params['force_rerun'])
                     steps_run.add(1)
             elif step == 2:
                 if 2 not in steps_run:
@@ -534,11 +580,12 @@ def run_pipeline_interactive():
                         confidence_threshold=params['confidence_threshold'],
                         tweet_chunksize=params['tweet_chunksize'],
                         prediction_batch_size=params['prediction_batch_size'],
+                        force=params['force_rerun']
                     )
                     steps_run.add(2)
             elif step == 3:
                 if 3 not in steps_run:
-                    run_step_3_merge_cleaned_data()
+                    run_step_3_merge_cleaned_data(force=params['force_rerun'])
                     steps_run.add(3)
             elif step == 4:
                 if 4 not in steps_run:
@@ -548,6 +595,7 @@ def run_pipeline_interactive():
                         test_mode=params['test_mode'],
                         sample_size=params['sample_size'],
                         input_path=get_combined_cleaned_path(),
+                        force=params['force_rerun']
                     )
                     steps_run.add(4)
             elif step == 5:
@@ -578,7 +626,6 @@ def run_pipeline_non_interactive(args):
     # Determine which steps to run
     steps_to_run = []
     if args.all:
-        # 'all' means steps 1-4, not step 5
         steps_to_run = [1, 2, 3, 4]
     elif args.step5:
         steps_to_run = [5]
@@ -597,6 +644,7 @@ def run_pipeline_non_interactive(args):
         return
     
     print(f"Running steps: {steps_to_run}")
+    print(f"Force mode: {args.force}")
     
     # Track which steps we've run
     steps_run = set()
@@ -605,7 +653,7 @@ def run_pipeline_non_interactive(args):
     for step in steps_to_run:
         if step == 1:
             if 1 not in steps_run:
-                run_step_2_clean(use_merged_data=False)
+                run_step_2_clean(use_merged_data=False, force=args.force)
                 steps_run.add(1)
         elif step == 2:
             if 2 not in steps_run:
@@ -613,11 +661,12 @@ def run_pipeline_non_interactive(args):
                     confidence_threshold=args.confidence_threshold,
                     tweet_chunksize=args.tweet_chunksize,
                     prediction_batch_size=args.prediction_batch_size,
+                    force=args.force
                 )
                 steps_run.add(2)
         elif step == 3:
             if 3 not in steps_run:
-                run_step_3_merge_cleaned_data()
+                run_step_3_merge_cleaned_data(force=args.force)
                 steps_run.add(3)
         elif step == 4:
             if 4 not in steps_run:
@@ -627,6 +676,7 @@ def run_pipeline_non_interactive(args):
                     test_mode=args.test,
                     sample_size=args.sample_size,
                     input_path=get_combined_cleaned_path(),
+                    force=args.force
                 )
                 steps_run.add(4)
         elif step == 5:
@@ -634,7 +684,7 @@ def run_pipeline_non_interactive(args):
                 run_step_5_complete_pipeline(
                     batch_size=args.batch_size,
                     use_gpu=not args.no_gpu,
-                    force_rerun=args.force_rerun
+                    force_rerun=args.force
                 )
             else:
                 logger.warning("Skipping step 5 because steps 1-4 were already run")
@@ -657,6 +707,9 @@ Examples:
   
   # Run the complete preprocessing pipeline (steps 1-4)
   python preprocessing_run.py --all
+  
+  # Force rerun all steps (overwrite existing files)
+  python preprocessing_run.py --all --force
   
   # Run step 5 (complete pipeline with caching checks)
   python preprocessing_run.py --step5
@@ -688,7 +741,7 @@ Examples:
     parser.add_argument("--confidence-threshold", type=float, default=0.7, help="High-confidence threshold for tweet labeling")
     parser.add_argument("--tweet-chunksize", type=int, default=50000, help="Tweet chunk size for labeled processing")
     parser.add_argument("--prediction-batch-size", type=int, default=5000, help="Batch size for tweet predictions")
-    parser.add_argument("--force-rerun", action="store_true", help="Force rerun all steps even if cached files exist")
+    parser.add_argument("--force", action="store_true", help="Force rerun all steps even if cached files exist")
     
     # Mode selection
     parser.add_argument("--interactive", action="store_true", help="Run in interactive mode")
@@ -705,4 +758,3 @@ Examples:
     else:
         # Non-interactive mode
         run_pipeline_non_interactive(args)
-        
