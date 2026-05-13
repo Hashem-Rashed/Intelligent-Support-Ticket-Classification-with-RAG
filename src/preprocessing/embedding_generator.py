@@ -85,7 +85,7 @@ class EmbeddingGenerator:
         return self.model
 
     def load_data(self, input_path: str) -> Tuple[List[str], pd.DataFrame]:
-        """Load and preprocess data efficiently"""
+        """Load and preprocess data efficiently, preserving clean_text in metadata."""
         logger.info(f"Loading data from {input_path}")
 
         df = pd.read_csv(input_path)
@@ -95,7 +95,7 @@ class EmbeddingGenerator:
 
         texts = df['clean_text'].fillna('').tolist()
 
-        # Extract categories - keep all categories (no filtering)
+        # Extract category column
         category_col = None
         for col in ['category', 'Issue_Category']:
             if col in df.columns:
@@ -110,12 +110,13 @@ class EmbeddingGenerator:
         total_texts = len(texts)
         logger.info(f"Loaded {total_texts:,} documents")
 
-        # Show unique categories
         unique_cats = set(categories)
         logger.info(f"Categories in data: {len(unique_cats)} - {sorted(unique_cats)}")
 
+        # 🔁 NEW: Include clean_text in metadata for later retrieval
         metadata = pd.DataFrame({
             "category": categories,
+            "clean_text": texts,          # <-- added
             "embedding_index": range(total_texts)
         })
 

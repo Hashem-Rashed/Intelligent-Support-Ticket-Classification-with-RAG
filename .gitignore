@@ -150,3 +150,8 @@ logs/
 data/processed/*
 data/embeddings/*
 data/raw/twcs.csv
+data/raw/tickets.csv
+
+
+# Model checkpoints
+bert_checkpoints/*

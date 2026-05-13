@@ -1,200 +1,170 @@
+"""
+Train TF‑IDF + Logistic Regression on merged support data (all categories).
+Updated with better defaults and optional class weighting.
+"""
 import argparse
-import os
 import sys
+import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
-# Ensure the project root is on sys.path when executing this script directly.
+# Add project root to path
 project_root = Path(__file__).resolve().parents[3]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import train_test_split
+from sklearn.utils import resample
 from src.models.baseline.tfidf_logreg import TFIDFLogReg
-from src.models.evaluation import evaluate_model, get_confusion_matrix
-from src.preprocessing.pipeline import run_pipeline
+from src.models.evaluation import evaluate_model, plot_confusion_matrix
 from src.utils.config import settings
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def load_clean_ticket_data(
-    raw_path: Optional[str] = None,
-    output_path: Optional[str] = None,
-    force_rebuild: bool = False,
-) -> pd.DataFrame:
-    """Load and clean CRM ticket data for supervised training."""
-    base_dir = Path(settings.PROJECT_ROOT)
-
-    if raw_path is None:
-        raw_path = base_dir / settings.DATA_RAW_PATH / "tickets.csv"
-    else:
-        raw_path = Path(raw_path)
-
-    if output_path is None:
-        output_path = base_dir / settings.DATA_PROCESSED_PATH / "tickets_cleaned.csv"
-    else:
-        output_path = Path(output_path)
-
-    if output_path.exists() and not force_rebuild:
-        logger.info(f"Loading cleaned ticket data from {output_path}")
-        df = pd.read_csv(output_path, low_memory=False, dtype={"clean_text": str, "Issue_Category": str})
-    else:
-        logger.info("Cleaning raw CRM tickets for baseline training")
-        df = run_pipeline(
-            input_path=str(raw_path),
-            output_path=str(output_path),
-            use_merged_data=False,
-        )
-
-    if "Issue_Category" not in df.columns:
-        raise ValueError("Cleaned ticket data does not contain 'Issue_Category' labels")
-
+def load_merged_data(data_path: str = None) -> pd.DataFrame:
+    """Load merged support data."""
+    if data_path is None:
+        data_path = Path(settings.PROJECT_ROOT) / settings.DATA_PROCESSED_PATH / "merged_support_data.csv"
+    df = pd.read_csv(data_path)
+    logger.info(f"Loaded {len(df):,} rows from {data_path}")
     return df
+
+
+def balance_dataset(df: pd.DataFrame, target_col: str = "category", samples_per_class: int = None) -> pd.DataFrame:
+    """Undersample majority classes, optionally oversample minority.
+    If samples_per_class is None, no balancing occurs."""
+    if samples_per_class is None:
+        logger.info("No balancing applied.")
+        return df
+    logger.info(f"Balancing dataset to {samples_per_class} samples per class")
+    balanced_dfs = []
+    for cat in df[target_col].unique():
+        cat_df = df[df[target_col] == cat]
+        if len(cat_df) >= samples_per_class:
+            sampled = cat_df.sample(n=samples_per_class, random_state=42)
+        else:
+            sampled = cat_df.sample(n=samples_per_class, replace=True, random_state=42)
+        balanced_dfs.append(sampled)
+    balanced_df = pd.concat(balanced_dfs, ignore_index=True)
+    logger.info(f"Balanced dataset size: {len(balanced_df):,}")
+    return balanced_df
 
 
 def prepare_train_test(
     df: pd.DataFrame,
     text_col: str = "clean_text",
-    label_col: str = "Issue_Category",
+    label_col: str = "category",
     test_size: float = 0.2,
     random_state: int = 42,
-) -> Tuple[list, list, list, list]:
-    """Prepare a stratified train/test split from cleaned ticket data."""
-    logger.info("Preparing stratified train/test split")
-
-    df = df[[text_col, label_col]].copy()
-    df[text_col] = df[text_col].astype(str).str.strip()
-    df[label_col] = df[label_col].astype(str).str.strip()
-    df = df[df[text_col].astype(bool) & df[label_col].astype(bool)]
-
+):
+    """Stratified train/test split."""
+    X = df[text_col].astype(str).tolist()
     y = df[label_col].values
-    X = df[text_col].tolist()
-
-    if len(df) == 0:
-        raise ValueError("No valid ticket records were found after cleaning")
-
-    logger.info(f"Dataset size after cleaning: {len(df)}")
-    logger.info("Label distribution:\n%s", df[label_col].value_counts().to_dict())
-
     X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=test_size,
-        random_state=random_state,
-        stratify=y,
+        X, y, test_size=test_size, random_state=random_state, stratify=y
     )
-
-    logger.info("Train/test split complete")
-    logger.info("Training set size: %d", len(X_train))
-    logger.info("Validation set size: %d", len(X_test))
-
+    logger.info(f"Train: {len(X_train):,}, Test: {len(X_test):,}")
     return X_train, X_test, y_train, y_test
 
 
 def train_baseline_model(
     X_train: list,
-    y_train,
-    max_features: int = 5000,
-    max_df: float = 0.8,
-    min_df: int = 2,
+    y_train: list,
+    max_features: int = 15000,
+    max_df: float = 0.6,
+    min_df: int = 3,
+    ngram_range: tuple = (1, 3),
     C: float = 1.0,
-    class_weight: Optional[str] = None,
-    random_state: int = 42,
+    class_weight: str = "balanced",
 ) -> TFIDFLogReg:
-    """Train the TF-IDF + Logistic Regression baseline model."""
+    """Instantiate and train model."""
     model = TFIDFLogReg(
         max_features=max_features,
         max_df=max_df,
         min_df=min_df,
+        ngram_range=ngram_range,
         C=C,
         class_weight=class_weight,
-        random_state=random_state,
     )
     model.fit(X_train, y_train)
     return model
 
 
-def evaluate_baseline_model(
-    model: TFIDFLogReg,
-    X_test: list,
-    y_test,
-    labels: Optional[list] = None,
-) -> Dict[str, object]:
-    """Evaluate the baseline model and return metrics plus confusion matrix."""
-    y_pred = model.predict(X_test)
-    metrics = evaluate_model(y_test, y_pred, labels=labels)
-    conf_matrix = get_confusion_matrix(y_test, y_pred)
+def save_model_artifacts(model: TFIDFLogReg, output_dir: Path):
+    """Save model, config, and metrics."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model_path = output_dir / "tfidf_logreg_model.pkl"
+    model.save(str(model_path))
 
-    logger.info("Confusion matrix shape: %s", conf_matrix.shape)
-    logger.debug("Confusion matrix:\n%s", conf_matrix)
-
-    return {
-        "metrics": metrics,
-        "confusion_matrix": conf_matrix,
+    config = {
+        "model_type": "TFIDFLogReg",
+        "classes": model.label_encoder.classes_.tolist(),
+        "num_classes": len(model.label_encoder.classes_),
+        "max_features": model.max_features,
+        "max_df": model.max_df,
+        "min_df": model.min_df,
+        "ngram_range": model.ngram_range,
+        "C": model.C,
     }
+    import json
+    with open(output_dir / "model_config.json", "w") as f:
+        json.dump(config, f, indent=2)
+    logger.info(f"Model artifacts saved to {output_dir}")
 
 
-def run_baseline_training(
-    raw_path: Optional[str] = None,
-    cleaned_path: Optional[str] = None,
-    model_output_path: Optional[str] = None,
-    test_size: float = 0.2,
-    class_weight: Optional[str] = None,
-    force_rebuild: bool = False,
-) -> Dict[str, object]:
-    """Run the full supervised baseline training pipeline."""
-    df = load_clean_ticket_data(
-        raw_path=raw_path,
-        output_path=cleaned_path,
-        force_rebuild=force_rebuild,
-    )
+def main(args):
+    start_time = time.time()
 
-    X_train, X_test, y_train, y_test = prepare_train_test(
-        df,
-        test_size=test_size,
-    )
+    df = load_merged_data(args.data_path)
+    if args.balance:
+        df = balance_dataset(df, samples_per_class=args.samples_per_class)
+
+    X_train, X_test, y_train, y_test = prepare_train_test(df, test_size=args.test_size)
 
     model = train_baseline_model(
-        X_train,
-        y_train,
-        class_weight=class_weight,
+        X_train, y_train,
+        max_features=args.max_features,
+        max_df=args.max_df,
+        min_df=args.min_df,
+        ngram_range=(1, args.ngram_max),
+        C=args.C,
+        class_weight=args.class_weight,
     )
 
-    evaluation = evaluate_baseline_model(model, X_test, y_test)
+    y_pred = model.predict(X_test)
+    metrics = evaluate_model(y_test, y_pred)
 
-    if model_output_path is None:
-        model_output_path = Path(settings.PROJECT_ROOT) / settings.DATA_PROCESSED_PATH / "baseline_ticket_classifier.pkl"
+    logger.info("Evaluation results:")
+    for k, v in metrics.items():
+        logger.info(f"  {k}: {v:.4f}")
 
-    model.save(str(model_output_path))
-    logger.info("Saved baseline model to %s", model_output_path)
+    # Plot confusion matrix
+    output_dir = Path(args.output_dir) if args.output_dir else Path(settings.PROJECT_ROOT) / "models" / "baseline"
+    plot_confusion_matrix(y_test, y_pred, labels=model.label_encoder.classes_.tolist(),
+                          save_path=output_dir / "confusion_matrix.png")
 
-    return {
-        "model": model,
-        "evaluation": evaluation,
-        "model_path": str(model_output_path),
-    }
+    save_model_artifacts(model, output_dir)
+
+    elapsed = time.time() - start_time
+    logger.info(f"Total training time: {elapsed / 60:.2f} minutes")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train TF-IDF + Logistic Regression baseline for ticket classification")
-    parser.add_argument("--raw-path", type=str, help="Path to raw ticket CSV", default=None)
-    parser.add_argument("--cleaned-path", type=str, help="Path to save cleaned ticket file", default=None)
-    parser.add_argument("--model-output-path", type=str, help="Path to save trained model", default=None)
-    parser.add_argument("--test-size", type=float, default=0.2, help="Validation set size fraction")
-    parser.add_argument("--class-weight", type=str, choices=["balanced", "None"], default="None", help="Optional class weighting strategy")
-    parser.add_argument("--force-rebuild", action="store_true", help="Rebuild cleaned data even if cached")
-
+    parser = argparse.ArgumentParser(description="Train baseline model")
+    parser.add_argument("--data-path", type=str, help="Path to merged CSV")
+    parser.add_argument("--balance", action="store_true", default=True)
+    parser.add_argument("--samples-per-class", type=int, default=None, help="If None, no balancing")
+    parser.add_argument("--test-size", type=float, default=0.2)
+    parser.add_argument("--max-features", type=int, default=15000)
+    parser.add_argument("--max-df", type=float, default=0.6)
+    parser.add_argument("--min-df", type=int, default=3)
+    parser.add_argument("--ngram-max", type=int, default=3)
+    parser.add_argument("--C", type=float, default=1.0)
+    parser.add_argument("--class-weight", type=str, default="balanced")
+    parser.add_argument("--output-dir", type=str)
     args = parser.parse_args()
-    class_weight_value = None if args.class_weight == "None" else args.class_weight
 
-    run_baseline_training(
-        raw_path=args.raw_path,
-        cleaned_path=args.cleaned_path,
-        model_output_path=args.model_output_path,
-        test_size=args.test_size,
-        class_weight=class_weight_value,
-        force_rebuild=args.force_rebuild,
-    )
+    main(args)

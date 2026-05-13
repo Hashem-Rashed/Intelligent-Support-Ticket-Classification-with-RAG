@@ -29,18 +29,16 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-# In print_menu() function, update the description:
-
 def print_menu():
     print("\n" + "="*60)
     print("PREPROCESSING PIPELINE MENU")
     print("="*60)
     print("\nAvailable Pipeline Steps:")
-    print("  1. Process Twitter data (8 categories with keyword classification)")
+    print("  1. Process Twitter data (9 categories with keyword classification)")
     print("       - Categories: Fraud, Billing, Technical, Account, Delivery")
-    print("         Feature Request, Customer Support, General Inquiry")
+    print("         Feature Request, Customer Support, General Inquiry ,Security")
     print("       - outputs data/processed/tweets_processed.csv")
-    print("  2. Clean CRM tickets (5 categories only)")
+    print("  2. Clean CRM tickets (9 categories only)")
     print("       - Categories: Account, Billing, Fraud, General Inquiry, Technical")
     print("       - outputs data/processed/tickets_cleaned.csv")
     print("  3. Merge tickets + Twitter data (preserves all categories)")
@@ -55,7 +53,7 @@ def print_menu():
 
 
 def run_step_1_process_twitter(
-    confidence_threshold: float = 0.3,
+    confidence_threshold: float = 0.55,
     min_text_length: int = 15,
     sample_size: int = None,
     force: bool = False
@@ -195,7 +193,7 @@ def run_step_4_generate_embeddings(
 
 
 def run_all_steps(
-    twitter_confidence: float = 0.3,
+    twitter_confidence: float = 0.55,
     batch_size: int = 256,
     use_gpu: bool = True,
     test_mode: bool = False,
@@ -255,8 +253,8 @@ def get_params():
     print("PIPELINE CONFIGURATION")
     print("="*60)
 
-    twitter_conf = input("\nTwitter confidence threshold [0.3]: ").strip()
-    twitter_conf = float(twitter_conf) if twitter_conf else 0.3
+    twitter_conf = input("\nTwitter confidence threshold [0.55]: ").strip()
+    twitter_conf = float(twitter_conf) if twitter_conf else 0.55
 
     use_gpu = input("\nUse GPU for embeddings? (y/n) [y]: ").lower().strip() != 'n'
     batch_size = int(input("Batch size [256]: ").strip() or 256)
@@ -341,7 +339,7 @@ if __name__ == "__main__":
     parser.add_argument("--step3", action="store_true", help="Merge datasets")
     parser.add_argument("--step4", action="store_true", help="Generate embeddings")
     parser.add_argument("--all", action="store_true", help="Run all steps")
-    parser.add_argument("--twitter-confidence", type=float, default=0.3)
+    parser.add_argument("--twitter-confidence", type=float, default=0.55)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--no-gpu", action="store_true")
     parser.add_argument("--test", action="store_true")
