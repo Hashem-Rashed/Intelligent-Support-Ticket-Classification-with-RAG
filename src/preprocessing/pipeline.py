@@ -12,7 +12,6 @@ from .text_processing import clean_text
 
 logger = get_logger(__name__)
 
-# Define the 5 target categories
 TARGET_CATEGORIES = {'Account', 'Billing', 'Fraud', 'General Inquiry', 'Technical'}
 
 
@@ -63,7 +62,6 @@ def run_pipeline(
         if len(data) < before:
             logger.info(f"  Removed {before - len(data)} duplicate tickets after cleaning")
 
-        # ** Filter to only the 5 target categories **
         before = len(data)
         data = data[data['category'].isin(TARGET_CATEGORIES)]
         removed = before - len(data)

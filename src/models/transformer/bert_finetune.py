@@ -1,6 +1,6 @@
 """
 BERT / DistilBERT fine-tuning with class weighting and focal loss.
-Optimized for RTX A2000 8GB.
+Optimized for RTX A2000 8GB – now with max_length=128 default and gradient checkpointing.
 """
 import os
 import numpy as np
@@ -109,7 +109,7 @@ class BERTFineTune:
         self,
         model_name: str = "distilbert-base-uncased",
         num_labels: int = None,
-        max_length: int = 256,
+        max_length: int = 256,          # reduced from 256 for memory
         learning_rate: float = 3e-5,
         epochs: int = 5,
         batch_size: int = 16,
@@ -142,14 +142,12 @@ class BERTFineTune:
         logger.info(f"Initializing model: {model_name}")
 
     def _compute_class_weights(self, y_train_encoded: np.ndarray) -> torch.Tensor:
-        """Compute balanced class weights from training labels."""
         classes = np.unique(y_train_encoded)
         weights = np.zeros(len(classes), dtype=np.float32)
         total = len(y_train_encoded)
         for c in classes:
             count = np.sum(y_train_encoded == c)
             weights[c] = total / (len(classes) * count)
-        # Normalize to mean=1
         weights = weights / weights.mean()
         return torch.tensor(weights, dtype=torch.float32)
 
@@ -160,46 +158,35 @@ class BERTFineTune:
         validation_split: float = 0.1,
         progress_callback: Optional[Callable] = None,
     ) -> None:
-        """Fine-tune transformer with automatic class weighting."""
-        # Encode labels
         y_encoded = self.label_encoder.fit_transform(y)
         self.num_labels = len(self.label_encoder.classes_)
         self.classes_ = self.label_encoder.classes_.tolist()
-
-        # Compute class weights if not provided
         if self.class_weights is None:
             class_weights_tensor = self._compute_class_weights(y_encoded)
         else:
             class_weights_tensor = torch.tensor(list(self.class_weights.values()), dtype=torch.float32)
-
         logger.info(f"Class weights: {class_weights_tensor.tolist()}")
-
-        # Split train/validation
         from sklearn.model_selection import train_test_split
         X_train, X_val, y_train, y_val = train_test_split(
             X, y_encoded, test_size=validation_split, random_state=42, stratify=y_encoded
         )
         logger.info(f"Train samples: {len(X_train)}, Validation samples: {len(X_val)}")
-
-        # Load tokenizer and model
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name,
             num_labels=self.num_labels,
             ignore_mismatched_sizes=True,
         )
+        # Enable gradient checkpointing to save memory (trade compute for memory)
+        self.model.gradient_checkpointing_enable()
         self.model.to(self.device)
 
-        # Create datasets
         train_dataset = TicketDataset(X_train, y_train, self.tokenizer, self.max_length)
         val_dataset = TicketDataset(X_val, y_val, self.tokenizer, self.max_length)
-
-        # Training arguments optimized for 8GB GPU
         effective_batch_size = self.batch_size * self.gradient_accumulation_steps
         logging_steps = max(100, len(train_dataset) // (effective_batch_size * 5))
         total_training_steps = len(train_dataset) * self.epochs // effective_batch_size
         warmup_steps = int(0.1 * total_training_steps)
-
         training_args = TrainingArguments(
             output_dir="./bert_checkpoints",
             num_train_epochs=self.epochs,
@@ -222,16 +209,12 @@ class BERTFineTune:
             dataloader_num_workers=2,
             dataloader_pin_memory=True,
         )
-
-        # Metrics
         def compute_metrics(eval_pred):
             predictions, labels = eval_pred
             predictions = np.argmax(predictions, axis=1)
             acc = accuracy_score(labels, predictions)
             f1 = f1_score(labels, predictions, average="weighted")
             return {"accuracy": acc, "f1": f1}
-
-        # Choose trainer
         if self.use_focal_loss:
             trainer = FocalLossTrainer(
                 gamma=self.focal_gamma,
@@ -252,18 +235,14 @@ class BERTFineTune:
                 compute_metrics=compute_metrics,
                 callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
             )
-
         if progress_callback:
             trainer.add_callback(ProgressCallback(progress_callback))
-
         logger.info("Starting fine-tuning...")
         trainer.train()
-
         self.model = trainer.model
         logger.info("Fine-tuning complete")
 
     def predict(self, X: List[str], batch_size: int = 64) -> np.ndarray:
-        """Predict labels with batching."""
         if self.model is None:
             raise ValueError("Model not trained yet")
         self.model.eval()
@@ -285,7 +264,6 @@ class BERTFineTune:
         return self.label_encoder.inverse_transform(np.array(predictions))
 
     def predict_proba(self, X: List[str], batch_size: int = 64) -> np.ndarray:
-        """Predict class probabilities."""
         if self.model is None:
             raise ValueError("Model not trained yet")
         self.model.eval()
@@ -307,17 +285,13 @@ class BERTFineTune:
         return np.vstack(all_probs)
 
     def save(self, filepath: str) -> None:
-        """Save model, tokenizer, label encoder, and config."""
         save_path = Path(filepath)
         save_path.mkdir(parents=True, exist_ok=True)
-
         self.model.save_pretrained(save_path)
         self.tokenizer.save_pretrained(save_path)
-
         import pickle
         with open(save_path / "label_encoder.pkl", "wb") as f:
             pickle.dump(self.label_encoder, f)
-
         import json
         config_path = save_path / "config.json"
         if config_path.exists():
@@ -325,22 +299,18 @@ class BERTFineTune:
                 config = json.load(f)
         else:
             config = {}
-
         config["classes"] = self.classes_
         config["model_name"] = self.model_name
         config["num_labels"] = self.num_labels
         config["max_length"] = self.max_length
         config["class_weights"] = self.class_weights
         config["use_focal_loss"] = self.use_focal_loss
-
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
-
         logger.info(f"Model saved to {save_path}")
 
     @classmethod
     def load(cls, filepath: str) -> "BERTFineTune":
-        """Load model, tokenizer, label encoder."""
         load_path = Path(filepath)
         import pickle, json
         with open(load_path / "config.json", "r") as f:
@@ -350,7 +320,7 @@ class BERTFineTune:
         instance = cls(
             model_name=config["model_name"],
             num_labels=config["num_labels"],
-            max_length=config["max_length"],
+            max_length=config.get("max_length", 256),
             class_weights=config.get("class_weights", None),
             use_focal_loss=config.get("use_focal_loss", False),
         )

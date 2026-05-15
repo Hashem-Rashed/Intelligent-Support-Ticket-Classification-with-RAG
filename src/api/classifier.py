@@ -64,7 +64,6 @@ class ProductionTicketClassifier:
         )
 
     def predict_proba(self, text: str) -> np.ndarray:
-        """Return probability vector for the given text."""
         cleaned = self._clean(text)
         if not cleaned:
             cleaned = "general inquiry"
@@ -78,15 +77,12 @@ class ProductionTicketClassifier:
         cleaned = self._clean(text)
         if not cleaned:
             cleaned = "general inquiry"
-
         proba = self.predict_proba(text)
         pred_idx = np.argmax(proba)
         pred = self.classes[pred_idx]
         confidence = proba[pred_idx]
-
         threshold = self.thresholds.get(pred, 0.60)
         needs_review = confidence < threshold
-
         if return_details:
             return pred, confidence, needs_review
         return pred
@@ -120,13 +116,11 @@ class EnsembleTicketClassifier:
         if self.baseline is None and self.transformer is None:
             raise RuntimeError("No models available for ensemble.")
 
-        # Use classes from whichever model is available (they should be identical)
         if self.baseline:
             self.classes = self.baseline.classes
         else:
             self.classes = self.transformer.classes
 
-        # Define thresholds (could be same as single model defaults)
         self.thresholds = ProductionTicketClassifier.DEFAULT_THRESHOLDS
 
     def predict_proba(self, text: str) -> np.ndarray:
@@ -137,7 +131,6 @@ class EnsembleTicketClassifier:
             probs.append(self.transformer.predict_proba(text))
         if not probs:
             raise RuntimeError("No model available")
-        # Average probabilities
         return np.mean(probs, axis=0)
 
     def predict(self, text: str, return_details: bool = False) -> Union[str, Tuple[str, float, bool]]:
@@ -145,10 +138,8 @@ class EnsembleTicketClassifier:
         pred_idx = np.argmax(proba)
         pred = self.classes[pred_idx]
         confidence = proba[pred_idx]
-
         threshold = self.thresholds.get(pred, 0.60)
         needs_review = confidence < threshold
-
         if return_details:
             return pred, confidence, needs_review
         return pred

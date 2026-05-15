@@ -85,7 +85,6 @@ if st.button("Classify", type="primary"):
             st.error("🚨 **FRAUD ALERT** – Investigate immediately.")
             st.markdown("Recommended: freeze account, contact security, notify user.")
 
-        # Show top 3 predictions
         with st.spinner("Computing top probabilities..."):
             proba = classifier.predict_proba(user_input)
             top_indices = proba.argsort()[-3:][::-1]

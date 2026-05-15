@@ -102,7 +102,6 @@ class KeywordTweetCategorizer:
                 weight = 3.0 if level == 'primary' else (2.0 if level == 'secondary' else 1.0)
                 for kw in levels.get(level, []):
                     if kw in text_lower:
-                        # Check negation
                         pos = text_lower.find(kw)
                         context = text_lower[max(0, pos-20):pos]
                         negated = any(neg in context for neg in cls.NEGATION_WORDS)
@@ -110,7 +109,6 @@ class KeywordTweetCategorizer:
                             scores[cat] += weight
                             matched_terms[cat].append(kw)
 
-        # Select best category
         best_cat = max(scores, key=lambda c: scores[c])
         best_score = scores[best_cat]
 
@@ -145,14 +143,11 @@ class MLTweetCategorizer:
         """Train TF‑IDF + Logistic Regression on ticket data."""
         logger.info(f"Training ML classifier on tickets from {ticket_data_path}")
         df = pd.read_csv(ticket_data_path)
-        # Expect columns: 'clean_text' and 'category'
         if 'clean_text' not in df.columns or 'category' not in df.columns:
-            # Try alternative column names
             if 'Issue_Category' in df.columns:
                 df = df.rename(columns={'Issue_Category': 'category'})
             elif 'category' not in df.columns:
                 raise ValueError("Ticket data must have 'clean_text' and 'category' columns")
-        # Keep only 5 categories
         target_cats = ['Account', 'Billing', 'Fraud', 'General Inquiry', 'Technical']
         df = df[df['category'].isin(target_cats)]
         X = df['clean_text'].fillna('').tolist()
@@ -170,9 +165,7 @@ class MLTweetCategorizer:
         logger.info(f"ML classifier trained on {len(X)} tickets, {len(self.label_encoder.classes_)} classes")
 
     def predict(self, texts: List[str]) -> Tuple[List[str], List[float]]:
-        """Return (categories, confidences)."""
         if not self.is_fitted:
-            # Fallback to keyword classifier
             cats = []
             confs = []
             for t in texts:
@@ -212,19 +205,13 @@ class MLTweetCategorizer:
 # ============================================================
 
 def clean_tweet_text(text: str) -> str:
-    """Clean tweet text for classification."""
     if pd.isna(text):
         return ""
     text = str(text)
-    # Remove @mentions
     text = re.sub(r'@\w+\s+', '', text)
-    # Remove URLs
     text = re.sub(r'http\S+|www\S+|https\S+', '', text)
-    # Keep only letters, spaces, and some punctuation
     text = re.sub(r'[^a-zA-Z\s\.\?\!]', ' ', text)
-    # Lowercase
     text = text.lower()
-    # Expand common contractions
     contractions = {
         "don't": "do not", "doesn't": "does not", "didn't": "did not",
         "won't": "will not", "wouldn't": "would not", "couldn't": "could not",
@@ -234,18 +221,15 @@ def clean_tweet_text(text: str) -> str:
     }
     for k, v in contractions.items():
         text = text.replace(k, v)
-    # Remove extra spaces
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 
 def extract_customer_tweets(df: pd.DataFrame) -> pd.DataFrame:
-    """Keep only tweets likely from customers (not support replies)."""
     original_count = len(df)
     if 'inbound' in df.columns:
         customer_mask = df['inbound'] == True
     else:
-        # Heuristic: support replies often start with @customer or contain 'thanks for contacting'
         text_col = df.get('text', df.iloc[:, 0])
         customer_mask = (
             ~text_col.astype(str).str.contains(r'^@\w+\s+', na=False) &
@@ -266,14 +250,6 @@ def process_twitter_data(
     ticket_data_path: Optional[str] = None,
     ml_model_path: Optional[str] = None
 ) -> pd.DataFrame:
-    """
-    Process tweets using either ML (trained on tickets) or keyword fallback.
-    
-    Args:
-        use_ml: If True, train ML model on ticket data (or load from ml_model_path).
-        ticket_data_path: Path to cleaned tickets CSV (with 'clean_text' and 'category').
-        ml_model_path: Path to pre-trained ML model pickle (skips training).
-    """
     base_dir = Path(settings.PROJECT_ROOT)
     if input_path is None:
         input_path = base_dir / settings.DATA_RAW_PATH / "twcs.csv"
@@ -284,39 +260,28 @@ def process_twitter_data(
     logger.info("TWITTER PROCESSING (with ML classifier if available)")
     logger.info("=" * 70)
 
-    # Load raw tweets
-    logger.info(f"Loading from {input_path}")
     df = pd.read_csv(input_path, low_memory=False, on_bad_lines='skip')
     logger.info(f"Loaded {len(df):,} rows")
-
     if sample_size and sample_size < len(df):
         df = df.sample(n=sample_size, random_state=42)
         logger.info(f"Using sample: {len(df):,} rows")
 
-    # Filter customer tweets
     df = extract_customer_tweets(df)
-
-    # Clean text
     df['clean_text'] = df['text'].astype(str).apply(clean_tweet_text)
 
-    # Remove short/empty
     before = len(df)
     df = df[df['clean_text'].str.len() >= min_text_length]
     logger.info(f"Removed {before - len(df)} short tweets")
-
-    # Remove duplicates
     before = len(df)
     df = df.drop_duplicates(subset=['clean_text'], keep='first')
     logger.info(f"Removed {before - len(df)} duplicates")
 
-    # Prepare ML classifier if requested
     categorizer = None
     if use_ml:
         try:
             if ml_model_path and Path(ml_model_path).exists():
                 categorizer = MLTweetCategorizer(model_path=ml_model_path)
             else:
-                # Use ticket data if provided, else look for default merged data
                 if ticket_data_path is None:
                     default_ticket_path = base_dir / settings.DATA_PROCESSED_PATH / "tickets_cleaned.csv"
                     if default_ticket_path.exists():
@@ -330,7 +295,6 @@ def process_twitter_data(
             logger.warning(f"ML classifier failed: {e}; falling back to keyword.")
             categorizer = None
 
-    # Classify
     texts = df['clean_text'].tolist()
     if categorizer:
         categories, confidences = categorizer.predict(texts)
@@ -344,35 +308,29 @@ def process_twitter_data(
     df['category'] = categories
     df['confidence'] = confidences
 
-    # Apply confidence threshold
     high_conf = df[df['confidence'] >= confidence_threshold].copy()
     medium_conf = df[(df['confidence'] >= 0.3) & (df['confidence'] < confidence_threshold)].copy()
     low_conf = df[df['confidence'] < 0.3]
 
-    # Replace Unicode symbols in logs
     logger.info(f"\nClassification results:")
     logger.info(f"  High confidence (>={confidence_threshold}): {len(high_conf)}")
     logger.info(f"  Medium confidence: {len(medium_conf)}")
     logger.info(f"  Low confidence: {len(low_conf)}")
 
-    # Category distribution
     logger.info("\nCategory distribution (high confidence):")
     for cat, count in high_conf['category'].value_counts().items():
         avg_conf = high_conf[high_conf['category'] == cat]['confidence'].mean()
         logger.info(f"  {cat:20s}: {count:5d} (avg conf {avg_conf:.2f})")
 
-    # Save outputs
     output_path.parent.mkdir(parents=True, exist_ok=True)
     high_conf[['clean_text', 'category', 'confidence']].to_csv(output_path, index=False)
     logger.info(f"\nSaved {len(high_conf)} tweets to {output_path}")
 
-    # Optionally save medium confidence for manual review
     if len(medium_conf) > 0:
         review_path = output_path.parent / "tweets_medium_confidence.csv"
         medium_conf[['clean_text', 'category', 'confidence']].to_csv(review_path, index=False)
         logger.info(f"Saved {len(medium_conf)} medium-confidence tweets to {review_path}")
 
-    # Save ML model if newly trained and not already saved
     if categorizer and categorizer.is_fitted and not ml_model_path:
         model_save_path = base_dir / "models" / "twitter_classifier.pkl"
         model_save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,21 +340,16 @@ def process_twitter_data(
     return high_conf
 
 
-# ============================================================
-# 4. CLI entry point
-# ============================================================
-
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Twitter processing with optional ML")
-    parser.add_argument("--sample", type=int, help="Number of rows to sample")
-    parser.add_argument("--use-ml", action="store_true", default=True, help="Use ML classifier (requires ticket data)")
-    parser.add_argument("--ticket-data", type=str, help="Path to tickets_cleaned.csv")
-    parser.add_argument("--ml-model", type=str, help="Path to pre-trained ML model pickle")
-    parser.add_argument("--confidence", type=float, default=0.5, help="Confidence threshold")
-    parser.add_argument("--test", action="store_true", help="Run test on sample tweets")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sample", type=int)
+    parser.add_argument("--use-ml", action="store_true", default=True)
+    parser.add_argument("--ticket-data", type=str)
+    parser.add_argument("--ml-model", type=str)
+    parser.add_argument("--confidence", type=float, default=0.5)
+    parser.add_argument("--test", action="store_true")
     args = parser.parse_args()
-
     if args.test:
         test_texts = [
             "Someone stole my credit card and made unauthorized purchases!",
@@ -411,7 +364,6 @@ if __name__ == "__main__":
             print(f"{t[:50]:50} -> {cat} ({conf:.2f})")
         import sys
         sys.exit(0)
-
     df_out = process_twitter_data(
         sample_size=args.sample,
         use_ml=args.use_ml,
