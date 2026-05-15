@@ -1,7 +1,8 @@
 """
 Unified Model Training Runner with Progress Tracking
 Supports: TF-IDF + Logistic Regression, Transformer (DistilBERT/BERT)
-Optimized for RTX A2000 8GB.
+Optimized for RTX A2000 8GB – now only 5 categories.
+Includes memory‑safe training and graceful fallback.
 """
 import os
 import sys
@@ -99,7 +100,10 @@ def prepare_train_test(df, text_col='clean_text', label_col='category', test_siz
     return X_train, X_val, X_test, y_train, y_val, y_test
 
 
-def find_best_thresholds(model, X_val, y_val, classes_to_tune=['Fraud', 'Security']):
+def find_best_thresholds(model, X_val, y_val, classes_to_tune=None):
+    """Find optimal per‑class thresholds using validation set."""
+    if classes_to_tune is None:
+        classes_to_tune = ['Fraud']  # only tune Fraud to reduce false positives
     proba = model.predict_proba(X_val)
     y_val_encoded = model.label_encoder.transform(y_val)
     class_indices = {cls: idx for idx, cls in enumerate(model.classes_)}
@@ -126,7 +130,8 @@ def find_best_thresholds(model, X_val, y_val, classes_to_tune=['Fraud', 'Securit
     return best_thresholds
 
 
-def train_baseline(X_train, y_train, output_dir, max_features=15000, C=1.0, max_df=0.5, min_df=2, ngram_range=(1,4), use_smote=False):
+def train_baseline(X_train, y_train, output_dir, max_features=15000, C=1.0, max_df=0.5, min_df=2,
+                   ngram_range=(1,4), use_smote=False):
     from src.models.baseline.tfidf_logreg import TFIDFLogReg
     logger.info("Training TF-IDF + Logistic Regression...")
     timer = TrainingTimer(description="Baseline training")
@@ -141,25 +146,22 @@ def train_baseline(X_train, y_train, output_dir, max_features=15000, C=1.0, max_
     X_train_tfidf = model.vectorizer.fit_transform(X_train)
     y_train_encoded = model.label_encoder.fit_transform(y_train)
     model.classes_ = model.label_encoder.classes_.tolist()
-    
+
     if use_smote:
-        from collections import Counter
         from imblearn.over_sampling import SMOTE
+        from collections import Counter
         class_counts = Counter(y_train_encoded)
         fraud_idx = model.label_encoder.transform(['Fraud'])[0]
-        security_idx = model.label_encoder.transform(['Security'])[0]
         target_dict = {}
         if class_counts[fraud_idx] < 30000:
             target_dict[fraud_idx] = 30000
-        if class_counts[security_idx] < 30000:
-            target_dict[security_idx] = 30000
         if target_dict:
             sm = SMOTE(sampling_strategy=target_dict, random_state=42)
             X_train_tfidf, y_train_encoded = sm.fit_resample(X_train_tfidf, y_train_encoded)
-            logger.info(f"After SMOTE: X shape {X_train_tfidf.shape}, y shape {y_train_encoded.shape}")
+            logger.info(f"After SMOTE: X shape {X_train_tfidf.shape}")
         else:
-            logger.info("SMOTE skipped: Fraud and Security already have >=30000 samples.")
-    
+            logger.info("SMOTE skipped – Fraud already has >=30000 samples.")
+
     model.classifier.fit(X_train_tfidf, y_train_encoded)
     model.is_fitted = True
     timer.finish()
@@ -171,9 +173,28 @@ def train_baseline(X_train, y_train, output_dir, max_features=15000, C=1.0, max_
 
 
 def train_transformer(X_train, y_train, output_dir, model_name='distilbert-base-uncased',
-                      epochs=5, batch_size=16, gradient_accumulation=2):
+                      epochs=5, batch_size=16, gradient_accumulation=2, max_length=128):
     from src.models.transformer.bert_finetune import BERTFineTune
-    logger.info(f"Training transformer: {model_name}...")
+    import torch
+
+    # Memory adaptation: reduce batch size if GPU memory is limited
+    original_batch_size = batch_size
+    if torch.cuda.is_available():
+        free_mem = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
+        free_mem_gb = free_mem / 1e9
+        logger.info(f"Free GPU memory: {free_mem_gb:.2f} GB")
+        if free_mem_gb < 4.0 and batch_size > 8:
+            batch_size = 8
+            gradient_accumulation = 4
+            logger.warning(f"Low GPU memory, reducing batch size to {batch_size}, gradient accumulation to {gradient_accumulation}")
+        elif free_mem_gb < 6.0 and batch_size > 16:
+            batch_size = 16
+            gradient_accumulation = 2
+            logger.warning(f"Moderate GPU memory, keeping batch size {batch_size}")
+    else:
+        logger.warning("No GPU detected, training on CPU will be slow")
+
+    logger.info(f"Training transformer: {model_name} with batch_size={batch_size}, grad_acc={gradient_accumulation}, max_len={max_length}...")
     timer = TrainingTimer(description=f"Transformer ({epochs} epochs)", total_steps=epochs)
     model = BERTFineTune(
         model_name=model_name,
@@ -181,7 +202,7 @@ def train_transformer(X_train, y_train, output_dir, model_name='distilbert-base-
         batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation,
         use_gpu=True,
-        max_length=256,
+        max_length=max_length,
         learning_rate=3e-5,
     )
     start = time.time()
@@ -198,15 +219,14 @@ def train_transformer(X_train, y_train, output_dir, model_name='distilbert-base-
 
 def evaluate_model(model, X_test, y_test, save_dir=None, apply_thresholds=True, model_type="baseline"):
     from src.models.evaluation import evaluate_model as eval_func, plot_confusion_matrix
-    
-    # FIX: Only baseline accepts apply_thresholds
-    if model_type == "baseline":
+
+    if model_type == "baseline" and apply_thresholds:
         y_pred = model.predict(X_test, apply_thresholds=apply_thresholds)
     else:
-        y_pred = model.predict(X_test)  # transformer predict doesn't have that arg
-    
+        y_pred = model.predict(X_test)
+
     metrics = eval_func(y_test, y_pred)
-    
+
     if save_dir:
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -221,7 +241,7 @@ def evaluate_model(model, X_test, y_test, save_dir=None, apply_thresholds=True, 
     return metrics, y_pred
 
 
-def compute_auto_samples_per_class(df, target_col='category', model_type='baseline', transformer_max=20000):
+def compute_auto_samples_per_class(df, target_col='category', model_type='baseline', transformer_max=15000):
     class_counts = df[target_col].value_counts()
     min_class_size = class_counts.min()
     if model_type == 'transformer':
@@ -234,7 +254,7 @@ def compute_auto_samples_per_class(df, target_col='category', model_type='baseli
 
 
 def run_model_step(data_path, balance, samples_per_class, test_size, model_type,
-                   output_dir, force_retrain, auto_limit, transformer_max=20000, 
+                   output_dir, force_retrain, auto_limit, transformer_max=15000,
                    use_smote=False, **kwargs):
     df = load_data(data_path)
 
@@ -275,18 +295,29 @@ def run_model_step(data_path, balance, samples_per_class, test_size, model_type,
             use_smote=use_smote
         )
         logger.info("Tuning per-class thresholds on validation set...")
-        best_thresholds = find_best_thresholds(model, X_val, y_val, classes_to_tune=['Fraud', 'Security'])
+        best_thresholds = find_best_thresholds(model, X_val, y_val, classes_to_tune=['Fraud'])
         model.set_thresholds(best_thresholds)
+    elif model_type == 'transformer':
+        try:
+            model, train_time = train_transformer(
+                X_train, y_train, output_dir,
+                model_name=kwargs.get('model_name', 'distilbert-base-uncased'),
+                epochs=kwargs.get('epochs', 5),
+                batch_size=kwargs.get('batch_size', 16),
+                gradient_accumulation=kwargs.get('gradient_accumulation', 2),
+                max_length=kwargs.get('max_length', 128)
+            )
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
+                logger.error(f"Transformer training failed due to GPU memory: {e}")
+                logger.info("Falling back to baseline model only. Skipping transformer.")
+                return None, None
+            else:
+                raise
     else:
-        model, train_time = train_transformer(
-            X_train, y_train, output_dir,
-            model_name=kwargs.get('model_name', 'distilbert-base-uncased'),
-            epochs=kwargs.get('epochs', 5),
-            batch_size=kwargs.get('batch_size', 16),
-            gradient_accumulation=kwargs.get('gradient_accumulation', 2),
-        )
+        raise ValueError(f"Unknown model type: {model_type}")
 
-    metrics, y_pred = evaluate_model(model, X_test, y_test, save_dir=output_dir, 
+    metrics, y_pred = evaluate_model(model, X_test, y_test, save_dir=output_dir,
                                      apply_thresholds=True, model_type=model_type)
     logger.info(f"Evaluation metrics: {metrics}")
 
@@ -305,7 +336,7 @@ def run_model_step(data_path, balance, samples_per_class, test_size, model_type,
 
 def print_menu():
     print("\n" + "="*70)
-    print("MODEL TRAINING MENU (Optimized for RTX A2000 8GB)")
+    print("MODEL TRAINING MENU (Optimized for RTX A2000 8GB) – 5 categories")
     print("="*70)
     print("\nAvailable Models:")
     print("  1. TF-IDF + Logistic Regression (fast, improved defaults)")
@@ -325,18 +356,18 @@ def get_default_params():
     balance = input("\nBalance dataset? (y/n) [y]: ").lower().strip() != 'n'
     auto_limit = False
     samples = None
-    transformer_max = 20000
+    transformer_max = 15000  # reduced from 20000
     if balance:
         auto_limit = input("Auto‑limit samples per class based on data? (y/n) [y]: ").lower().strip() != 'n'
         if auto_limit:
-            transformer_max = int(input("Transformer max samples per class (cap) [20000]: ").strip() or 20000)
+            transformer_max = int(input("Transformer max samples per class (cap) [15000]: ").strip() or 15000)
         else:
             samples = int(input("Samples per class (0 = no balancing) [25000]: ").strip() or 25000)
             if samples == 0:
                 balance = False
     test_size = float(input("Test size fraction [0.2]: ").strip() or 0.2)
     force = input("Force retrain (overwrite existing)? (y/n) [n]: ").lower().strip() == 'y'
-    use_smote = input("Apply SMOTE oversampling for Fraud/Security (baseline only)? (y/n) [n]: ").lower().strip() == 'y'
+    use_smote = input("Apply SMOTE oversampling for Fraud (baseline only)? (y/n) [n]: ").lower().strip() == 'y'
 
     max_features = int(input("TF-IDF max features [15000]: ").strip() or 15000)
     C = float(input("Logistic Regression C (regularization) [1.0]: ").strip() or 1.0)
@@ -401,6 +432,7 @@ def run_interactive():
                 'max_df': 0.5,
                 'min_df': 2,
                 'ngram_range': (1,4),
+                'max_length': 128,
             }
 
             run_model_step(
@@ -438,6 +470,7 @@ def run_non_interactive(args):
         'max_df': 0.5,
         'min_df': 2,
         'ngram_range': (1,4),
+        'max_length': 128,
     }
 
     run_model_step(
@@ -462,7 +495,7 @@ if __name__ == "__main__":
     parser.add_argument("--balance", action="store_true")
     parser.add_argument("--samples-per-class", type=int, default=25000)
     parser.add_argument("--auto-limit", action="store_true")
-    parser.add_argument("--transformer-max", type=int, default=20000)
+    parser.add_argument("--transformer-max", type=int, default=15000)
     parser.add_argument("--use-smote", action="store_true")
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--max-features", type=int, default=15000)

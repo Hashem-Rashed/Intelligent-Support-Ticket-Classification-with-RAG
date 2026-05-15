@@ -117,7 +117,6 @@ class TFIDFLogReg:
                     break
             if chosen_idx is None:
                 # No class meets its threshold → fallback
-                # First try the highest probability class if it's > 0.3
                 if probs[sorted_indices[0]] >= 0.3:
                     chosen_idx = sorted_indices[0]
                 else:

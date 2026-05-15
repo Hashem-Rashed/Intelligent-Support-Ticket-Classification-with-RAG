@@ -1,7 +1,6 @@
 """
 Merge tickets and Twitter data into a single dataset.
-Tickets: 9 categories
-Tweets: 9 categories (kept as-is)
+Now only keeps 5 categories: Account, Billing, Fraud, General Inquiry, Technical.
 """
 
 import os
@@ -13,52 +12,47 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Ticket categories (9)
-TICKET_CATEGORIES = {'Account', 'Billing', 'Fraud', 'General Inquiry', 'Technical',
-    'Delivery', 'Feature Request', 'Customer Support', 'Security'}
-
-# Tweet categories (9) - all valid
-TWEET_CATEGORIES = {
-    'Account', 'Billing', 'Fraud', 'General Inquiry', 'Technical',
-    'Delivery', 'Feature Request', 'Customer Support', 'Security'
+# Define the 5 target categories
+TARGET_CATEGORIES = {
+    'Account', 'Billing', 'Fraud', 'General Inquiry', 'Technical'
 }
 
-# All valid categories for merged data
-VALID_CATEGORIES = TICKET_CATEGORIES | TWEET_CATEGORIES
+# All valid categories for merged data (same set)
+VALID_CATEGORIES = TARGET_CATEGORIES
 
 
 def filter_ticket_categories(df: pd.DataFrame, category_col: str) -> pd.DataFrame:
-    """Filter tickets to only keep 9 categories."""
+    """Filter tickets to only keep the 5 target categories."""
     original_count = len(df)
-    df = df[df[category_col].isin(TICKET_CATEGORIES)]
+    df = df[df[category_col].isin(TARGET_CATEGORIES)]
     removed = original_count - len(df)
     if removed > 0:
-        logger.info(f"  Removed {removed} rows with invalid ticket categories")
+        logger.info(f"  Removed {removed} rows with non‑target categories")
     return df
 
 
 def filter_tweet_categories(df: pd.DataFrame, category_col: str) -> pd.DataFrame:
-    """Filter tweets to only keep valid tweet categories."""
+    """Filter tweets to only keep the 5 target categories."""
     original_count = len(df)
     df = df[df[category_col].isin(VALID_CATEGORIES)]
     removed = original_count - len(df)
     if removed > 0:
-        logger.info(f"  Removed {removed} rows with invalid tweet categories")
+        logger.info(f"  Removed {removed} rows with non‑target tweet categories")
     return df
 
 
 def resolve_fraud_security_overpredictions(text: str, predicted_class: str, confidence: float) -> str:
     """
-    Post‑processing rule to override Fraud/Security predictions that are likely false positives.
-    Use this after model prediction (baseline or transformer).
+    Post‑processing rule to override Fraud predictions that are likely false positives.
+    (Security category no longer exists – kept for compatibility but only Fraud matters.)
     """
-    if predicted_class not in ('Fraud', 'Security'):
+    if predicted_class != 'Fraud':
         return predicted_class
-    if confidence >= 0.75:   # high confidence predictions are kept
+    if confidence >= 0.75:
         return predicted_class
 
     text_lower = text.lower()
-    # Override if text contains typical non‑fraud/non‑security language
+    # Override if text contains typical non‑fraud language
     if any(phrase in text_lower for phrase in ['how to', 'suggest', 'feature', 'why does', 'not working', 'please help']):
         return 'General Inquiry'
     if any(word in text_lower for word in ['password reset', 'login', '2fa', 'authentication', 'locked out']):
@@ -77,9 +71,7 @@ def merge_datasets(
     force_reprocess_tweets: bool = False
 ) -> pd.DataFrame:
     """
-    Merge ticket and Twitter datasets.
-    Tickets: 9 categories
-    Tweets: 9 categories (preserved)
+    Merge ticket and Twitter datasets, keeping only the 5 target categories.
     """
     base_dir = Path(settings.PROJECT_ROOT)
 
@@ -95,10 +87,9 @@ def merge_datasets(
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     logger.info("=" * 70)
-    logger.info("MERGING TICKETS AND TWITTER DATA")
+    logger.info("MERGING TICKETS AND TWITTER DATA (5 categories)")
     logger.info("=" * 70)
-    logger.info(f"Ticket categories (9): {sorted(TICKET_CATEGORIES)}")
-    logger.info(f"Tweet categories (9): {sorted(TWEET_CATEGORIES)}")
+    logger.info(f"Target categories: {sorted(TARGET_CATEGORIES)}")
 
     # Load tickets
     logger.info(f"\nLoading tickets from {tickets_path}")
@@ -123,7 +114,7 @@ def merge_datasets(
     tweets_std['source'] = 'twitter'
     tweets_std['confidence'] = tweets['confidence'] if 'confidence' in tweets.columns else 0.7
 
-    # Filter categories (tickets only 9, tweets all 9)
+    # Filter to target categories
     tickets_std = filter_ticket_categories(tickets_std, 'category')
     tweets_std = filter_tweet_categories(tweets_std, 'category')
 

@@ -1,5 +1,6 @@
 """
 Text cleaning utilities for tickets and tweets.
+Improved: no word limit, keeps important punctuation, preserves negations.
 """
 
 import re
@@ -8,11 +9,17 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Stopwords – removed short negation words
 CUSTOM_STOPWORDS = {
     'hi', 'hello', 'hey', 'dear', 'support', 'team', 'please', 'thanks',
     'thank', 'would', 'could', 'get', 'make', 'want', 'need', 'ask', 'tell',
-    'via', 'rt', 'amp'
+    'via', 'rt', 'amp', 'just', 'like', 'well', 'also', 'even', 'still'
 }
+
+# Keep these short words (negations and important ones)
+KEEP_SHORT_WORDS = {'no', 'not', 'don', 'doesn', 'didn', 'won', 'wouldn',
+                    'couldn', 'shouldn', 'isn', 'aren', 'wasn', 'weren',
+                    'haven', 'hasn', 'hadn', 'can', 'let', 'out', 'off'}
 
 COMMON_GREETINGS = [
     "hi support", "hello support", "dear support", "hi team", "hello team",
@@ -35,31 +42,17 @@ def remove_greetings(text: str) -> str:
                 if len(parts) > 1:
                     remainder = parts[1]
             return remainder
-
     return text
 
 
-def truncate_at_punctuation(text: str) -> str:
-    """Keep only text before first '?' or '.' to remove random suffixes."""
-    if not text:
-        return text
-
-    for delimiter in ['?', '.', '!']:
-        if delimiter in text:
-            text = text.split(delimiter)[0] + delimiter
-            break
-
-    return text.strip()
-
-
-def clean_text(text, max_words=8, remove_greetings_flag=True, is_twitter=False):
+def clean_text(text, max_words=None, remove_greetings_flag=True, is_twitter=False):
     """
     Clean text for classification.
 
     Args:
         text: Input text string
-        max_words: Maximum words to keep
-        remove_greetings_flag: Remove common greetings
+        max_words: Maximum words to keep (None = no limit)
+        remove_greetings_flag: Remove common greetings (tickets only)
         is_twitter: If True, apply Twitter-specific cleaning
     """
     if pd.isna(text):
@@ -67,37 +60,39 @@ def clean_text(text, max_words=8, remove_greetings_flag=True, is_twitter=False):
 
     text = str(text)
 
-    # Twitter-specific cleaning
     if is_twitter:
-        text = re.sub(r'@\w+', '', text)  # Remove @mentions
-        text = re.sub(r'^rt\s+', '', text, flags=re.IGNORECASE)  # Remove RT
+        text = re.sub(r'@\w+', '', text)
+        text = re.sub(r'^rt\s+', '', text, flags=re.IGNORECASE)
 
     text = text.lower()
 
     # Remove URLs
     text = re.sub(r"http\S+|www\S+|https\S+", "", text)
 
-    # Remove everything after first '?' or '.'
-    text = truncate_at_punctuation(text)
+    # Keep important punctuation (! and ?) but remove others
+    text = re.sub(r"[^a-z\s!?']", " ", text)
 
-    # Remove special characters
-    text = re.sub(r"[^a-z\s]", " ", text)
-
-    # Remove extra spaces
+    # Normalize whitespace
     text = re.sub(r"\s+", " ", text).strip()
 
-    # Remove greetings (only for tickets)
     if remove_greetings_flag and not is_twitter:
         text = remove_greetings(text)
 
-    # Remove stopwords and limit length
     words = text.split()
-    words = [w for w in words if w not in CUSTOM_STOPWORDS and len(w) > 2]
 
-    if len(words) > max_words:
-        words = words[:max_words]
+    filtered_words = []
+    for w in words:
+        if w in KEEP_SHORT_WORDS:
+            filtered_words.append(w)
+        elif len(w) > 2 and w not in CUSTOM_STOPWORDS:
+            filtered_words.append(w)
+        elif len(w) == 2 and w not in CUSTOM_STOPWORDS and w.isalpha():
+            filtered_words.append(w)
 
-    return ' '.join(words)
+    if max_words is not None and max_words > 0 and len(filtered_words) > max_words:
+        filtered_words = filtered_words[:max_words]
+
+    return ' '.join(filtered_words)
 
 
 def merge_subject_description(data):

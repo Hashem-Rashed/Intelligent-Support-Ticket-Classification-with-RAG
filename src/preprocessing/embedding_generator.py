@@ -1,6 +1,6 @@
 """
 Embedding Generator for Support Ticket Classification
-Preserves all categories (5 from tickets, 8 from tweets)
+Now works with 5 categories: Account, Billing, Fraud, General Inquiry, Technical
 """
 
 import os

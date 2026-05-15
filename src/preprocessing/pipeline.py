@@ -1,5 +1,5 @@
 """
-Main preprocessing pipeline for tickets.
+Main preprocessing pipeline for tickets – now keeps only 5 categories.
 """
 
 import os
@@ -12,23 +12,15 @@ from .text_processing import clean_text
 
 logger = get_logger(__name__)
 
+# Define the 5 target categories
+TARGET_CATEGORIES = {'Account', 'Billing', 'Fraud', 'General Inquiry', 'Technical'}
+
 
 def run_pipeline(
     input_path: Optional[str] = None,
     output_path: Optional[str] = None,
     use_merged_data: bool = False
 ) -> pd.DataFrame:
-    """
-    Execute the preprocessing pipeline for tickets only.
-
-    Args:
-        input_path: Path to raw tickets.csv
-        output_path: Path to save cleaned data
-        use_merged_data: Deprecated - kept for compatibility
-
-    Returns:
-        Cleaned DataFrame
-    """
     base_dir = Path(settings.PROJECT_ROOT)
 
     if output_path is None:
@@ -37,53 +29,52 @@ def run_pipeline(
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     logger.info("=" * 70)
-    logger.info("STARTING PREPROCESSING PIPELINE (TICKETS ONLY)")
+    logger.info("STARTING PREPROCESSING PIPELINE (TICKETS ONLY) – 5 categories")
     logger.info("=" * 70)
 
     try:
-        # Load tickets
         if input_path is None:
             input_path = base_dir / settings.DATA_RAW_PATH / "tickets.csv"
 
         logger.info(f"Loading tickets from {input_path}")
         data = pd.read_csv(input_path)
 
-        # Use Ticket_Description as text
         data['clean_text'] = data['Ticket_Description'].astype(str)
         data['category'] = data['Issue_Category'].astype(str)
         data['source'] = 'ticket'
 
-        # Remove duplicates based on clean_text
         before = len(data)
         data = data.drop_duplicates(subset=['clean_text'], keep='first')
         if len(data) < before:
             logger.info(f"  Removed {before - len(data)} duplicate tickets")
 
-        # Clean text
         logger.info("\nCleaning text data...")
         data['clean_text'] = data['clean_text'].apply(
-            lambda x: clean_text(x, max_words=8, remove_greetings_flag=True, is_twitter=False)
+            lambda x: clean_text(x, max_words=None, remove_greetings_flag=True, is_twitter=False)
         )
 
-        # Remove empty rows
         before = len(data)
         data = data[data['clean_text'].str.len() > 0]
         if len(data) < before:
             logger.info(f"  Removed {before - len(data)} rows with empty text")
 
-        # Remove duplicates again after cleaning (same text may become identical after cleaning)
         before = len(data)
         data = data.drop_duplicates(subset=['clean_text'], keep='first')
         if len(data) < before:
             logger.info(f"  Removed {before - len(data)} duplicate tickets after cleaning")
 
-        # Prepare final dataset
+        # ** Filter to only the 5 target categories **
+        before = len(data)
+        data = data[data['category'].isin(TARGET_CATEGORIES)]
+        removed = before - len(data)
+        if removed > 0:
+            logger.info(f"  Removed {removed} rows with categories not in {TARGET_CATEGORIES}")
+
         logger.info("\nPreparing final dataset...")
         final_data = data[['clean_text', 'category']].copy()
         final_data.rename(columns={'category': 'Issue_Category'}, inplace=True)
         final_data['source'] = data['source']
 
-        # Save
         final_data.to_csv(output_path, index=False)
 
         logger.info("\n" + "=" * 70)
