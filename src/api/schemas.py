@@ -2,61 +2,54 @@
 Request and response schemas for the API.
 """
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 
 
-class ClassifyTicketRequest(BaseModel):
+class ClassifyRequest(BaseModel):
     """Request schema for ticket classification."""
-
-    ticket_id: str = Field(..., description="Unique ticket identifier")
-    title: str = Field(..., description="Ticket title/subject")
-    content: str = Field(..., description="Ticket description content")
-    priority: Optional[str] = Field(None, description="Ticket priority level")
-    customer_id: Optional[str] = Field(None, description="Customer ID")
+    text: str = Field(..., description="Ticket description text", min_length=1)
+    model_type: Optional[str] = Field("ensemble", description="Model to use: 'baseline', 'transformer', or 'ensemble'")
+    return_details: Optional[bool] = Field(True, description="Return confidence and needs_review flag")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
-                "ticket_id": "TICK-001",
-                "title": "Login Issues",
-                "content": "Unable to login to the platform",
-                "priority": "high",
-                "customer_id": "CUST-123",
+                "text": "Someone stole my credit card and made unauthorized purchases",
+                "model_type": "ensemble",
+                "return_details": True
             }
         }
 
 
-class ClassifyTicketResponse(BaseModel):
+class ClassifyResponse(BaseModel):
     """Response schema for ticket classification."""
-
-    ticket_id: str = Field(..., description="Ticket ID")
-    classification: str = Field(..., description="Predicted ticket category")
-    confidence: float = Field(..., description="Confidence score (0-1)")
-    suggested_category: Optional[str] = Field(
-        None, description="Alternative suggested category"
-    )
+    category: str = Field(..., description="Predicted category (Account, Billing, Fraud, General Inquiry, Technical)")
+    confidence: Optional[float] = Field(None, description="Confidence score (0-1)")
+    needs_review: Optional[bool] = Field(None, description="Whether human review is recommended")
+    model_used: Optional[str] = Field(None, description="Which model produced the prediction")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
-                "ticket_id": "TICK-001",
-                "classification": "Technical Support",
-                "confidence": 0.95,
-                "suggested_category": "Bug Report",
+                "category": "Fraud",
+                "confidence": 0.97,
+                "needs_review": False,
+                "model_used": "ensemble"
             }
         }
+
+
+class BatchClassifyRequest(BaseModel):
+    """Request schema for batch classification."""
+    tickets: List[ClassifyRequest] = Field(..., description="List of tickets to classify")
+
+
+class BatchClassifyResponse(BaseModel):
+    """Response schema for batch classification."""
+    results: List[ClassifyResponse]
 
 
 class HealthResponse(BaseModel):
     """Response schema for health check."""
-
     status: str = Field(..., description="Health status")
-    message: Optional[str] = Field(None, description="Status message")
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "status": "healthy",
-                "message": "Service is running normally",
-            }
-        }
+    models_available: List[str] = Field(..., description="List of loaded models")

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Ticket Classifier{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="fas fa-ticket-alt me-2"></i>Ticket Classifier
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/"><i class="fas fa-file-alt me-1"></i>Classify</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/rag"><i class="fas fa-brain me-1"></i>RAG Explain</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/batch"><i class="fas fa-upload me-1"></i>Batch Upload</a>
+                    </li>
+                </ul>
+                <div class="api-status ms-3">
+                    {% if api_status %}
+                        <span class="badge bg-success"><i class="fas fa-check-circle"></i> API Online</span>
+                    {% else %}
+                        <span class="badge bg-danger"><i class="fas fa-exclamation-triangle"></i> API Offline</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <footer class="text-center mt-5 py-3 text-muted">
+        <hr>
+        <small>Powered by TF‑IDF · DistilBERT · Ensemble · Groq LLM · Chroma</small>
+    </footer>
+</body>
+</html>

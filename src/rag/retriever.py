@@ -1,144 +1,102 @@
 """
-Retriever component for RAG system.
+Retriever for similar tickets using Chroma vector database.
 """
-from typing import List, Dict, Optional, Tuple
-import numpy as np
+import sys
+from pathlib import Path
+import chromadb
+from typing import List, Dict, Any, Optional
+
+project_root = Path(__file__).resolve().parents[2]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from src.utils.config import settings
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class FAISSRetriever:
-    """FAISS-based vector search retriever."""
+class TicketRetriever:
+    """
+    Retrieve similar tickets from Chroma collection.
+    Supports metadata filtering (by category, etc.)
+    """
+    def __init__(
+        self,
+        collection_name: str = "ticket_embeddings",
+        persist_directory: Optional[str] = None,
+    ):
+        if persist_directory is None:
+            persist_directory = Path(settings.DATA_EMBEDDINGS_PATH) / "chroma_db"
+        self.persist_directory = str(persist_directory)
+        self.collection_name = collection_name
 
-    def __init__(self, embedding_dim: int = 768):
-        """
-        Initialize FAISSRetriever.
-
-        Args:
-            embedding_dim: Dimension of embeddings
-        """
-        self.embedding_dim = embedding_dim
-        self.index = None
-        self.documents = []
-        logger.info("Initialized FAISS retriever")
-
-    def add_documents(self, texts: List[str], embeddings: np.ndarray) -> None:
-        """
-        Add documents to the index.
-
-        Args:
-            texts: List of document texts
-            embeddings: Embeddings for documents
-        """
-        self.documents.extend(texts)
-        # FAISS indexing would happen here
-        logger.info(f"Added {len(texts)} documents to index")
+        self.client = chromadb.PersistentClient(path=self.persist_directory)
+        self.collection = self.client.get_collection(collection_name)
+        logger.info(f"Loaded Chroma collection '{collection_name}' with {self.collection.count()} vectors")
 
     def retrieve(
         self,
-        query_embedding: np.ndarray,
-        top_k: int = 5
-    ) -> List[Tuple[str, float]]:
-        """
-        Retrieve top-k documents for a query.
-
-        Args:
-            query_embedding: Query embedding vector
-            top_k: Number of results to return
-
-        Returns:
-            List of (document, similarity_score) tuples
-        """
-        # Placeholder - in practice would use FAISS search
-        results = []
-        for i, doc in enumerate(self.documents[:top_k]):
-            results.append((doc, float(np.random.rand())))
-        return results
-
-
-class PineconeRetriever:
-    """Pinecone vector database retriever."""
-
-    def __init__(self, api_key: str, index_name: str = "tickets"):
-        """
-        Initialize PineconeRetriever.
-
-        Args:
-            api_key: Pinecone API key
-            index_name: Name of Pinecone index
-        """
-        self.api_key = api_key
-        self.index_name = index_name
-        logger.info(f"Initialized Pinecone retriever for index: {index_name}")
-
-    def retrieve(
-        self,
-        query_embedding: np.ndarray,
+        query: str,
         top_k: int = 5,
-        metadata_filter: Optional[Dict] = None
-    ) -> List[Dict]:
+        score_threshold: float = 0.0,
+        filter_category: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
-        Retrieve top-k documents from Pinecone.
+        Retrieve similar tickets.
 
         Args:
-            query_embedding: Query embedding vector
-            top_k: Number of results to return
-            metadata_filter: Optional metadata filter
+            query: Query text
+            top_k: Number of results
+            score_threshold: Minimum similarity (1 - distance) to include
+            filter_category: Optional category to filter results
 
         Returns:
-            List of result dictionaries
+            List of dicts with keys: 'score', 'metadata', 'document'
         """
-        # Placeholder - in practice would call Pinecone API
-        results = []
-        logger.info(f"Retrieved {top_k} results from Pinecone")
-        return results
+        where_filter = None
+        if filter_category:
+            where_filter = {"category": filter_category}
 
+        results = self.collection.query(
+            query_texts=[query],
+            n_results=top_k,
+            where=where_filter,
+            include=["distances", "metadatas", "documents"],
+        )
 
-class HybridRetriever:
-    """Hybrid retriever combining multiple retrieval methods."""
+        # Chroma returns distances (0 = identical, larger = less similar)
+        # Convert to similarity score (1 - distance) assuming embeddings normalized
+        formatted = []
+        if results['ids'] and results['ids'][0]:
+            for i, id_ in enumerate(results['ids'][0]):
+                distance = results['distances'][0][i]  # cosine distance (0-2 range)
+                # For normalized embeddings, cosine similarity = 1 - distance/2? Actually chroma uses cosine distance = 1 - similarity.
+                # Simpler: similarity = 1 - distance (if distance is 0..1). We'll just cap.
+                similarity = max(0.0, 1.0 - distance)
+                if similarity < score_threshold:
+                    continue
+                formatted.append({
+                    "score": similarity,
+                    "metadata": results['metadatas'][0][i],
+                    "document": results['documents'][0][i] if results['documents'] else "",
+                })
+        return formatted
 
-    def __init__(self, retriever1, retriever2, weights: Tuple[float, float] = (0.5, 0.5)):
-        """
-        Initialize HybridRetriever.
-
-        Args:
-            retriever1: First retriever
-            retriever2: Second retriever
-            weights: Weights for combining scores
-        """
-        self.retriever1 = retriever1
-        self.retriever2 = retriever2
-        self.weights = weights
-
-    def retrieve(
+    def retrieve_batch(
         self,
-        query_embedding: np.ndarray,
-        top_k: int = 5
-    ) -> List[Tuple[str, float]]:
-        """
-        Retrieve using both retrievers and combine results.
+        queries: List[str],
+        top_k: int = 5,
+        score_threshold: float = 0.0,
+        filter_category: Optional[str] = None,
+    ) -> List[List[Dict[str, Any]]]:
+        return [self.retrieve(q, top_k, score_threshold, filter_category) for q in queries]
 
-        Args:
-            query_embedding: Query embedding vector
-            top_k: Number of results to return
 
-        Returns:
-            Combined top-k results
-        """
-        results1 = self.retriever1.retrieve(query_embedding, top_k)
-        results2 = self.retriever2.retrieve(query_embedding, top_k)
-
-        # Combine and rerank results
-        combined = {}
-        for doc, score in results1:
-            combined[doc] = score * self.weights[0]
-        for doc, score in results2:
-            if doc in combined:
-                combined[doc] += score * self.weights[1]
-            else:
-                combined[doc] = score * self.weights[1]
-
-        # Sort and return top-k
-        sorted_results = sorted(combined.items(), key=lambda x: x[1], reverse=True)
-        return sorted_results[:top_k]
+if __name__ == "__main__":
+    retriever = TicketRetriever()
+    test_query = "Someone stole my credit card and made unauthorized purchases"
+    results = retriever.retrieve(test_query, top_k=3)
+    print(f"Query: {test_query}")
+    for res in results:
+        print(f"  Score: {res['score']:.4f} | Category: {res['metadata']['category']} | Text: {res['document'][:80]}...")

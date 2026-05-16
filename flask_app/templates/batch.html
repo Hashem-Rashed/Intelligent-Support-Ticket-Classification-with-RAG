@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Batch Upload{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-file-csv me-2"></i>Batch Classification (CSV)
+            </div>
+            <div class="card-body">
+                <form method="POST" action="/batch/upload" enctype="multipart/form-data" id="batchForm">
+                    <div class="mb-3">
+                        <label for="file" class="form-label">Upload CSV file</label>
+                        <input class="form-control" type="file" id="file" name="file" accept=".csv" required>
+                        <div class="form-text">The CSV must have a column named <strong>text</strong> (one ticket per row).</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="model_type" class="form-label">Model</label>
+                        <select class="form-select" id="model_type" name="model_type">
+                            <option value="ensemble">Ensemble</option>
+                            <option value="transformer">Transformer</option>
+                            <option value="baseline">Baseline</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="batchBtn">
+                        <i class="fas fa-play"></i> Process All & Download Results
+                    </button>
+                    <div id="loadingSpinner" style="display:none;" class="ms-2 d-inline">
+                        <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                        <span>Processing, please wait...</span>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <i class="fas fa-question-circle"></i> Example CSV Format
+            </div>
+            <div class="card-body">
+                <pre class="mb-0">text
+"Someone stole my credit card"
+"I cannot log in"
+"My app keeps crashing"</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('batchForm').addEventListener('submit', function() {
+        document.getElementById('batchBtn').disabled = true;
+        document.getElementById('loadingSpinner').style.display = 'inline-block';
+    });
+</script>
+{% endblock %}
