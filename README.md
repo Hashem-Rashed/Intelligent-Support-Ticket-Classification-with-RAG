@@ -249,11 +249,7 @@ Before submitting changes:
 pytest
 ```
 
-Please ensure:
 
-* Code follows clean coding standards
-* Documentation is updated
-* Features are tested properly
 
 ---
 
