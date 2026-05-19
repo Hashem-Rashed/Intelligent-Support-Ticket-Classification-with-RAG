@@ -248,6 +248,15 @@ Before submitting changes:
 ```bash
 pytest
 ```
+## 👨‍💻 Project Team
+
+| Name |
+|---|
+| Hasham Abdelrahman |
+| Enas Essam |
+| Hossam Ashraf |
+| Ahmed Magdy |
+| Randa Hamada |
 
 
 
