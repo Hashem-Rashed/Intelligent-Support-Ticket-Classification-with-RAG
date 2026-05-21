@@ -1,6 +1,6 @@
 """
 API routes for ticket classification – uses trained models with LLM fallback and RAG.
-Includes monitoring, robust error handling, and explicit type conversion.
+Includes monitoring, robust error handling, explicit type conversion, and fast batch endpoint.
 """
 import time
 import uuid
@@ -15,10 +15,13 @@ from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_
 
 from src.api.schemas import (
     ClassifyRequest,
+    RagExplainRequest,
     ClassifyResponse,
     BatchClassifyRequest,
     BatchClassifyResponse,
     HealthResponse,
+    BatchFastRequest,
+    BatchFastResponse,
 )
 from src.api.classifier import ProductionTicketClassifier, EnsembleTicketClassifier
 from src.rag.retriever import TicketRetriever
@@ -171,23 +174,30 @@ async def classify_ticket(request: ClassifyRequest) -> ClassifyResponse:
         classifier = get_classifier(request.model_type)
         
         if request.return_details:
-            result = classifier.predict(request.text, return_details=True, allow_llm_fallback=True)
-            # result is a tuple: (category, confidence, needs_review, model_used)
+            result = classifier.predict(
+                request.text,
+                return_details=True,
+                allow_llm_fallback=request.use_llm_fallback,
+                confidence_threshold=request.confidence_threshold
+            )
             if isinstance(result, tuple) and len(result) == 4:
                 category, confidence, needs_review, model_used = result
             else:
-                # Fallback in case of unexpected return
                 category = str(result)
                 confidence = 0.0
                 needs_review = True
                 model_used = "error"
         else:
-            category = classifier.predict(request.text, return_details=False, allow_llm_fallback=True)
+            category = classifier.predict(
+                request.text,
+                return_details=False,
+                allow_llm_fallback=request.use_llm_fallback,
+                confidence_threshold=request.confidence_threshold
+            )
             confidence = None
             needs_review = None
             model_used = None
 
-        # Ensure native Python types for JSON serialization
         category = str(category)
         if confidence is not None:
             confidence = float(confidence)
@@ -219,10 +229,42 @@ async def classify_ticket(request: ClassifyRequest) -> ClassifyResponse:
 
 
 @router.post(
+    "/classify/batch_fast",
+    response_model=BatchFastResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Fast batch classification (single API call)",
+)
+async def classify_batch_fast(request: BatchFastRequest) -> BatchFastResponse:
+    start_time = time.time()
+    request_id = str(uuid.uuid4())[:8]
+    try:
+        classifier = get_classifier(request.model_type)
+        results = classifier.predict_batch(
+            request.texts,
+            return_details=request.return_details,
+            allow_llm_fallback=request.use_llm_fallback,
+            confidence_threshold=request.confidence_threshold
+        )
+        responses = []
+        for res in results:
+            if request.return_details:
+                cat, conf, review, used = res
+                responses.append(ClassifyResponse(category=cat, confidence=conf, needs_review=review, model_used=used))
+            else:
+                responses.append(ClassifyResponse(category=res))
+        latency = time.time() - start_time
+        logger.info(f"Batch fast {request_id}: {len(request.texts)} texts in {latency:.2f}s")
+        return BatchFastResponse(results=responses)
+    except Exception as e:
+        logger.error(f"Batch fast {request_id} error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
     "/classify/batch",
     response_model=BatchClassifyResponse,
     status_code=status.HTTP_200_OK,
-    summary="Classify multiple tickets",
+    summary="Classify multiple tickets (legacy)",
 )
 async def classify_tickets_batch(request: BatchClassifyRequest) -> BatchClassifyResponse:
     results = []
@@ -233,15 +275,22 @@ async def classify_tickets_batch(request: BatchClassifyRequest) -> BatchClassify
             classifier = get_classifier(ticket_req.model_type)
             if ticket_req.return_details:
                 category, confidence, needs_review, model_used = classifier.predict(
-                    ticket_req.text, return_details=True, allow_llm_fallback=True
+                    ticket_req.text,
+                    return_details=True,
+                    allow_llm_fallback=ticket_req.use_llm_fallback,
+                    confidence_threshold=ticket_req.confidence_threshold
                 )
-                # Convert to native types
                 category = str(category)
                 confidence = float(confidence) if confidence is not None else None
                 needs_review = bool(needs_review) if needs_review is not None else None
                 model_used = str(model_used) if model_used is not None else None
             else:
-                category = classifier.predict(ticket_req.text, return_details=False, allow_llm_fallback=True)
+                category = classifier.predict(
+                    ticket_req.text,
+                    return_details=False,
+                    allow_llm_fallback=ticket_req.use_llm_fallback,
+                    confidence_threshold=ticket_req.confidence_threshold
+                )
                 confidence = None
                 needs_review = None
                 model_used = None
@@ -279,19 +328,26 @@ async def classify_tickets_batch(request: BatchClassifyRequest) -> BatchClassify
     status_code=status.HTTP_200_OK,
     summary="Explain classification with similar tickets",
 )
-async def rag_explain(request: ClassifyRequest):
+async def rag_explain(request: RagExplainRequest):
     start_time = time.time()
     request_id = str(uuid.uuid4())[:8]
     try:
         classifier = get_classifier(request.model_type)
         category, confidence, needs_review, model_used = classifier.predict(
-            request.text, return_details=True, allow_llm_fallback=True
+            request.text,
+            return_details=True,
+            allow_llm_fallback=request.use_llm_fallback,
+            confidence_threshold=request.confidence_threshold
         )
 
         similar_tickets = []
         if retriever:
             try:
-                similar_tickets = retriever.retrieve(request.text, top_k=3)
+                similar_tickets = retriever.retrieve(
+                    request.text,
+                    top_k=request.top_k,
+                    score_threshold=request.similarity_threshold
+                )
             except Exception as e:
                 logger.warning(f"Retrieval failed for {request_id}: {e}")
 

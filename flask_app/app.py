@@ -11,8 +11,8 @@ app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-in-production'
 app.config['SESSION_TYPE'] = 'filesystem'
 
-# FastAPI backend URL
-API_BASE = "http://localhost:8000/api/v1"
+# Use environment variable for API base URL, fallback to localhost:8000
+API_BASE = os.environ.get('API_BASE_URL', 'http://localhost:8000/api/v1')
 ALLOWED_EXTENSIONS = {'csv'}
 
 def allowed_file(filename):
@@ -27,14 +27,13 @@ def get_api_status():
 
 @app.context_processor
 def inject_globals():
-    return dict(api_status=get_api_status())
+    return dict(api_status=get_api_status(), api_base=API_BASE)
 
 # ------------------------------
 # Routes
 # ------------------------------
 @app.route('/')
 def index():
-    # Initialize history in session if not exists
     if 'history' not in session:
         session['history'] = []
     return render_template('index.html', history=session['history'])
@@ -66,7 +65,7 @@ def classify():
         }
         history = session.get('history', [])
         history.insert(0, history_entry)
-        session['history'] = history[:10]  # keep last 10
+        session['history'] = history[:10]
         session.modified = True
         
         return render_template('index.html',
@@ -74,6 +73,9 @@ def classify():
                                input_text=text,
                                model_type=model_type,
                                history=session['history'])
+    except requests.exceptions.ConnectionError:
+        flash('Cannot connect to classification API. Make sure the backend is running (python -m src.api.main).', 'danger')
+        return redirect(url_for('index'))
     except Exception as e:
         flash(f"Classification error: {e}", 'danger')
         return redirect(url_for('index'))
@@ -102,6 +104,9 @@ def explain():
                                result=data,
                                input_text=text,
                                model_type=model_type)
+    except requests.exceptions.ConnectionError:
+        flash('Cannot connect to RAG API. Ensure the backend is running.', 'danger')
+        return redirect(url_for('rag'))
     except Exception as e:
         flash(f"RAG error: {e}", 'danger')
         return redirect(url_for('rag'))
@@ -134,7 +139,6 @@ def batch_upload():
             return redirect(url_for('batch'))
         
         results = []
-        total = len(df)
         for i, row in df.iterrows():
             text = str(row['text']).strip()
             if not text:
@@ -155,7 +159,6 @@ def batch_upload():
                 })
             except Exception as e:
                 results.append({"text": text, "category": "ERROR", "confidence": 0.0})
-            # Optional: progress update would require websockets, skip for now
         
         result_df = pd.DataFrame(results)
         output = io.BytesIO()

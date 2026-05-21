@@ -1,5 +1,6 @@
 """
 Production-ready ticket classifiers with optional LLM fallback for low confidence.
+Supports single and batch prediction (efficient for large lists).
 """
 import pickle
 import json
@@ -86,68 +87,70 @@ class ProductionTicketClassifier:
             is_twitter=False
         )
 
-    def predict_proba(self, text: str) -> np.ndarray:
-        cleaned = self._clean(text)
-        if not cleaned:
-            cleaned = "general inquiry"
+    # ------------------ Batch probability (efficient) ------------------
+    def _predict_proba_batch(self, texts: List[str]) -> np.ndarray:
+        """Return probabilities for multiple texts in one call."""
+        cleaned = [self._clean(t) or "general inquiry" for t in texts]
         if self.model_type == "baseline":
-            X = self.vectorizer.transform([cleaned])
-            return self.classifier.predict_proba(X)[0]
+            X = self.vectorizer.transform(cleaned)
+            return self.classifier.predict_proba(X)
         else:
-            return self.transformer_model.predict_proba([cleaned])[0]
+            # transformer's predict_proba already supports batch
+            return self.transformer_model.predict_proba(cleaned)
 
+    def predict_proba(self, text: str) -> np.ndarray:
+        return self._predict_proba_batch([text])[0]
+
+    # ------------------ Single prediction ------------------
     def predict(
         self,
         text: str,
         return_details: bool = False,
         allow_llm_fallback: bool = True,
+        confidence_threshold: Optional[float] = None,
     ) -> Union[str, Tuple[str, float, bool, Optional[str]]]:
+        return self.predict_batch([text], return_details, allow_llm_fallback, confidence_threshold)[0]
+
+    # ------------------ Batch prediction (core) ------------------
+    def predict_batch(
+        self,
+        texts: List[str],
+        return_details: bool = False,
+        allow_llm_fallback: bool = True,
+        confidence_threshold: Optional[float] = None,
+    ) -> List:
         """
-        Predict category for a ticket. Optionally use LLM for low confidence.
-        
-        Returns:
-            If return_details=False: category string
-            If return_details=True: (category, confidence, needs_review, model_used)
-                model_used: "baseline", "transformer", or "llm"
+        Predict categories for multiple texts efficiently.
+        Returns list of categories or (category, confidence, needs_review, model_used) if return_details.
         """
-        cleaned = self._clean(text)
-        if not cleaned:
-            cleaned = "general inquiry"
+        probas = self._predict_proba_batch(texts)
+        results = []
+        for proba, text in zip(probas, texts):
+            pred_idx = np.argmax(proba)
+            category = self.classes[pred_idx]
+            confidence = float(proba[pred_idx])
+            thr = confidence_threshold if confidence_threshold is not None else self.thresholds.get(category, 0.65)
+            needs_review = confidence < thr
+            model_used = self.model_type
 
-        # Get model prediction
-        proba = self.predict_proba(text)
-        pred_idx = np.argmax(proba)
-        category = self.classes[pred_idx]
-        confidence = proba[pred_idx]
-        threshold = self.thresholds.get(category, 0.65)
-        needs_review = confidence < threshold
+            # LLM fallback for low confidence (only if requested and available)
+            if allow_llm_fallback and self.use_llm_fallback and (needs_review or confidence < self.llm_confidence_threshold):
+                try:
+                    llm_category, llm_confidence = self.llm.classify_ticket(self._clean(text))
+                    if llm_confidence > confidence + 0.1:
+                        category = llm_category
+                        confidence = llm_confidence
+                        needs_review = False
+                        model_used = "llm"
+                        logger.info(f"LLM fallback used: {category} (conf={llm_confidence:.2f})")
+                except Exception as e:
+                    logger.error(f"LLM fallback failed: {e}")
 
-        model_used = self.model_type
-
-        # LLM fallback for low confidence
-        if (
-            allow_llm_fallback
-            and self.use_llm_fallback
-            and (needs_review or confidence < self.llm_confidence_threshold)
-        ):
-            try:
-                llm_category, llm_confidence = self.llm.classify_ticket(cleaned)
-                # Only override if LLM confidence is higher or model was very uncertain
-                if llm_confidence > confidence + 0.1:
-                    category = llm_category
-                    confidence = llm_confidence
-                    needs_review = False
-                    model_used = "llm"
-                    logger.info(f"LLM fallback used: {category} (conf={llm_confidence:.2f})")
-            except Exception as e:
-                logger.error(f"LLM fallback failed: {e}")
-
-        if return_details:
-            return category, confidence, needs_review, model_used
-        return category
-
-    def predict_batch(self, texts: List[str], return_details: bool = False) -> List:
-        return [self.predict(t, return_details) for t in texts]
+            if return_details:
+                results.append((category, confidence, needs_review, model_used))
+            else:
+                results.append(category)
+        return results
 
 
 class EnsembleTicketClassifier:
@@ -206,51 +209,63 @@ class EnsembleTicketClassifier:
                 logger.warning(f"Failed to initialize LLM fallback: {e}")
                 self.use_llm_fallback = False
 
-    def predict_proba(self, text: str) -> np.ndarray:
+    # ------------------ Batch probability ------------------
+    def predict_proba_batch(self, texts: List[str]) -> np.ndarray:
         probs = []
         if self.baseline:
-            probs.append(self.baseline.predict_proba(text))
+            probs.append(self.baseline._predict_proba_batch(texts))
         if self.transformer:
-            probs.append(self.transformer.predict_proba(text))
+            probs.append(self.transformer._predict_proba_batch(texts))
         if not probs:
             raise RuntimeError("No model available")
         return np.mean(probs, axis=0)
 
+    def predict_proba(self, text: str) -> np.ndarray:
+        return self.predict_proba_batch([text])[0]
+
+    # ------------------ Batch prediction ------------------
+    def predict_batch(
+        self,
+        texts: List[str],
+        return_details: bool = False,
+        allow_llm_fallback: bool = True,
+        confidence_threshold: Optional[float] = None,
+    ) -> List:
+        probas = self.predict_proba_batch(texts)
+        results = []
+        for proba, text in zip(probas, texts):
+            pred_idx = np.argmax(proba)
+            category = self.classes[pred_idx]
+            confidence = float(proba[pred_idx])
+            thr = confidence_threshold if confidence_threshold is not None else self.thresholds.get(category, 0.65)
+            needs_review = confidence < thr
+            model_used = "ensemble"
+
+            if allow_llm_fallback and self.use_llm_fallback and (needs_review or confidence < self.llm_confidence_threshold):
+                try:
+                    cleaned = self.baseline._clean(text) if self.baseline else text
+                    llm_category, llm_confidence = self.llm.classify_ticket(cleaned)
+                    if llm_confidence > confidence + 0.1:
+                        category = llm_category
+                        confidence = llm_confidence
+                        needs_review = False
+                        model_used = "llm"
+                        logger.info(f"LLM fallback used: {category} (conf={llm_confidence:.2f})")
+                except Exception as e:
+                    logger.error(f"LLM fallback failed: {e}")
+
+            if return_details:
+                results.append((category, confidence, needs_review, model_used))
+            else:
+                results.append(category)
+        return results
+
+    # ------------------ Single prediction ------------------
     def predict(
         self,
         text: str,
         return_details: bool = False,
         allow_llm_fallback: bool = True,
+        confidence_threshold: Optional[float] = None,
     ) -> Union[str, Tuple[str, float, bool, Optional[str]]]:
-        proba = self.predict_proba(text)
-        pred_idx = np.argmax(proba)
-        category = self.classes[pred_idx]
-        confidence = proba[pred_idx]
-        threshold = self.thresholds.get(category, 0.65)
-        needs_review = confidence < threshold
-        model_used = "ensemble"
-
-        # LLM fallback for low confidence
-        if (
-            allow_llm_fallback
-            and self.use_llm_fallback
-            and (needs_review or confidence < self.llm_confidence_threshold)
-        ):
-            try:
-                cleaned = self.baseline._clean(text) if self.baseline else text
-                llm_category, llm_confidence = self.llm.classify_ticket(cleaned)
-                if llm_confidence > confidence + 0.1:
-                    category = llm_category
-                    confidence = llm_confidence
-                    needs_review = False
-                    model_used = "llm"
-                    logger.info(f"LLM fallback used: {category} (conf={llm_confidence:.2f})")
-            except Exception as e:
-                logger.error(f"LLM fallback failed: {e}")
-
-        if return_details:
-            return category, confidence, needs_review, model_used
-        return category
-
-    def predict_batch(self, texts: List[str], return_details: bool = False) -> List:
-        return [self.predict(t, return_details) for t in texts]
+        return self.predict_batch([text], return_details, allow_llm_fallback, confidence_threshold)[0]
